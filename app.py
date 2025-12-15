@@ -60,9 +60,12 @@ def add_sessions(watch: pd.DataFrame, gap_minutes: int = 30) -> pd.DataFrame:
     w["session_id"] = w["new_session"].cumsum()
     return w
 
-# -------------------- THUMBNAILS (TikTok oEmbed) --------------------
+# -------------------- TikTok oEmbed --------------------
 @st.cache_data(show_spinner=False)
 def get_tiktok_oembed(url: str):
+    """
+    Returns: {thumb,title,author} or {} if blocked/rate-limited/unavailable.
+    """
     try:
         r = requests.get(
             "https://www.tiktok.com/oembed",
@@ -81,14 +84,14 @@ def get_tiktok_oembed(url: str):
         pass
     return {}
 
-# -------------------- CARD GRID (HTML COMPONENT) --------------------
-def render_cards(df: pd.DataFrame, cards_per_row: int, n: int):
+# -------------------- Card Grid (HTML component) --------------------
+def render_cards(df: pd.DataFrame, cards_per_row: int, n: int, load_thumbs: bool):
     required = {"ts_utc", "url"}
     if df is None or df.empty:
-        st.info("No rows to show. Select the correct file (Watch History / Like List) or widen the date range.")
+        st.info("No rows to show (empty). Try widening the date range or selecting the correct file.")
         return
     if not required.issubset(set(df.columns)):
-        st.error(f"Selected file didn’t parse correctly. Found columns: {list(df.columns)}")
+        st.error(f"Selected file didn’t parse into expected columns. Found columns: {list(df.columns)}")
         return
 
     recent = (
@@ -102,14 +105,18 @@ def render_cards(df: pd.DataFrame, cards_per_row: int, n: int):
     cards_html = ""
     for _, r in recent.iterrows():
         url_raw = str(r["url"])
-        meta = get_tiktok_oembed(url_raw)
+        meta = get_tiktok_oembed(url_raw) if load_thumbs else {}
 
         thumb = meta.get("thumb")
-        title = html.escape(meta.get("title") or "TikTok clip")
-        author = html.escape(meta.get("author") or "")
+        title_txt = meta.get("title") or "TikTok clip"
+        author_txt = meta.get("author") or ""
+
+        title = html.escape(title_txt)
+        author = html.escape(author_txt)
         time = pd.to_datetime(r["ts_utc"], utc=True).strftime("%Y-%m-%d %H:%M")
         url = html.escape(url_raw)
 
+        # Cover: thumbnail if available, else gradient
         if thumb:
             cover = f'<img src="{html.escape(thumb)}" />'
         else:
@@ -127,7 +134,7 @@ def render_cards(df: pd.DataFrame, cards_per_row: int, n: int):
           <div class="cover">{cover}</div>
           <div class="meta">
             <div class="title">{title}</div>
-            <div class="sub">{time} UTC {("• " + author) if author else ""}</div>
+            <div class="sub">{time} UTC{(" • " + author) if author_txt else ""}</div>
             <a class="btn" href="{url}" target="_blank" rel="noopener noreferrer">Open clip</a>
           </div>
         </div>
@@ -137,12 +144,20 @@ def render_cards(df: pd.DataFrame, cards_per_row: int, n: int):
     <html>
     <head><meta charset="utf-8"/></head>
     <style>
-      body {{ margin:0; background:transparent; color:white; font-family:sans-serif; }}
+      body {{
+        margin:0;
+        background:transparent;
+        color:white;
+        font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      }}
+
       .grid {{
         display:grid;
         grid-template-columns:repeat({cards_per_row},1fr);
         gap:18px;
       }}
+
+      /* Square card + hover scale/glow */
       .card {{
         aspect-ratio:1/1;
         padding:12px;
@@ -155,6 +170,7 @@ def render_cards(df: pd.DataFrame, cards_per_row: int, n: int):
         overflow:hidden;
         transition:transform .25s, box-shadow .25s, border-color .25s;
       }}
+
       .card:hover {{
         transform:scale(1.05);
         box-shadow:
@@ -163,6 +179,7 @@ def render_cards(df: pd.DataFrame, cards_per_row: int, n: int):
           0 0 35px rgba(255,90,90,.35);
         border-color: rgba(255,255,255,.25);
       }}
+
       .cover {{
         aspect-ratio:1/1;
         overflow:hidden;
@@ -170,6 +187,7 @@ def render_cards(df: pd.DataFrame, cards_per_row: int, n: int):
         border:1px solid rgba(255,255,255,.10);
         background:rgba(255,255,255,.06);
       }}
+
       .cover img {{
         width:100%;
         height:100%;
@@ -177,10 +195,28 @@ def render_cards(df: pd.DataFrame, cards_per_row: int, n: int):
         transition:transform .35s;
         display:block;
       }}
-      .card:hover .cover img {{ transform:scale(1.08); }}
+
+      .card:hover .cover img {{
+        transform:scale(1.08);
+      }}
+
       .meta {{ margin-top:8px; }}
-      .title {{ font-size:13px; font-weight:600; max-height:34px; overflow:hidden; }}
-      .sub {{ font-size:12px; opacity:.75; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
+
+      .title {{
+        font-size:13px;
+        font-weight:650;
+        max-height:34px;
+        overflow:hidden;
+      }}
+
+      .sub {{
+        font-size:12px;
+        opacity:.75;
+        white-space:nowrap;
+        overflow:hidden;
+        text-overflow:ellipsis;
+      }}
+
       .btn {{
         margin-top:8px;
         display:block;
@@ -192,7 +228,10 @@ def render_cards(df: pd.DataFrame, cards_per_row: int, n: int):
         color:white;
         text-decoration:none;
       }}
-      .btn:hover {{ background:rgba(255,255,255,.18); }}
+
+      .btn:hover {{
+        background:rgba(255,255,255,.18);
+      }}
     </style>
     <body>
       <div class="grid">{cards_html}</div>
@@ -204,9 +243,14 @@ def render_cards(df: pd.DataFrame, cards_per_row: int, n: int):
     height = min(1400, rows * 330 + 20)
     components.html(html_doc, height=height, scrolling=False)
 
-# -------------------- STREAMLIT APP --------------------
+# -------------------- APP --------------------
 st.set_page_config(layout="wide")
 st.title("Engagement & Retention Dashboard")
+
+st.info(
+    "📦 Upload your **TikTok data export ZIP**. "
+    "Then select **Watch History** and **Like List** files from the sidebar."
+)
 
 uploaded = st.sidebar.file_uploader("Upload TikTok ZIP", type=["zip"])
 if not uploaded:
@@ -215,14 +259,12 @@ if not uploaded:
 zip_bytes = uploaded.getvalue()
 paths = list_zip_paths(zip_bytes)
 
+# Auto-pick correct defaults
 watch_candidates = [p for p in paths if p.lower().endswith("watch history.txt")]
 likes_candidates = [p for p in paths if p.lower().endswith("like list.txt")]
 
-def pick_default(cands):
-    return cands[0] if cands else paths[0]
-
-watch_default = pick_default(watch_candidates)
-likes_default = pick_default(likes_candidates)
+watch_default = watch_candidates[0] if watch_candidates else paths[0]
+likes_default = likes_candidates[0] if likes_candidates else paths[0]
 
 watch_path = st.sidebar.selectbox("Watch History file", paths, index=paths.index(watch_default))
 likes_path = st.sidebar.selectbox("Like List file", paths, index=paths.index(likes_default))
@@ -230,12 +272,18 @@ likes_path = st.sidebar.selectbox("Like List file", paths, index=paths.index(lik
 watch = load_parsed_df(zip_bytes, watch_path)
 likes = load_parsed_df(zip_bytes, likes_path)
 
-# Debug (helps you pick correct paths)
-with st.expander("Debug (only if needed)"):
+# Controls
+st.sidebar.header("Display options")
+load_thumbs = st.sidebar.checkbox("Load thumbnails/titles (may be slower)", value=True)
+
+# Debug (optional)
+with st.expander("Debug (only if something looks wrong)"):
     st.write("Watch rows:", len(watch), "Columns:", list(watch.columns))
     st.write("Like rows:", len(likes), "Columns:", list(likes.columns))
+    st.write("Selected watch file:", watch_path)
+    st.write("Selected like file:", likes_path)
 
-# -------------------- DATE FILTERS (for KPIs + charts + sessions + cards) --------------------
+# Date filters based on available range
 min_dt = min([df["ts_utc"].min() for df in [watch, likes] if not df.empty], default=None)
 max_dt = max([df["ts_utc"].max() for df in [watch, likes] if not df.empty], default=None)
 
@@ -245,8 +293,8 @@ with c1:
 with c2:
     end = st.date_input("End date", value=max_dt.date() if max_dt is not None else None)
 
-watch_f = apply_date(watch, start, end) if not watch.empty else watch
-likes_f = apply_date(likes, start, end) if not likes.empty else likes
+watch_f = apply_date(watch, start, end) if (not watch.empty and "ts_utc" in watch.columns) else watch
+likes_f = apply_date(likes, start, end) if (not likes.empty and "ts_utc" in likes.columns) else likes
 
 # -------------------- KPIs --------------------
 st.subheader("KPIs")
@@ -255,8 +303,8 @@ watch_days = watch_f["ts_utc"].dt.date.nunique() if not watch_f.empty else 0
 total_watches = len(watch_f)
 total_likes = len(likes_f)
 
-watch_video_ids = set(watch_f["video_id"].dropna()) if "video_id" in watch_f.columns else set()
-like_video_ids = set(likes_f["video_id"].dropna()) if "video_id" in likes_f.columns else set()
+watch_video_ids = set(watch_f["video_id"].dropna()) if ("video_id" in watch_f.columns and not watch_f.empty) else set()
+like_video_ids = set(likes_f["video_id"].dropna()) if ("video_id" in likes_f.columns and not likes_f.empty) else set()
 watch_to_like = (len(watch_video_ids & like_video_ids) / len(watch_video_ids)) if watch_video_ids else 0.0
 
 k1, k2, k3, k4 = st.columns(4)
@@ -267,11 +315,11 @@ k4.metric("Watch → Like conversion", f"{watch_to_like:.1%}")
 
 st.divider()
 
-# -------------------- GRAPHS (Trends) --------------------
+# -------------------- GRAPHS --------------------
 st.subheader("Trends")
 t1, t2 = st.columns(2)
 
-if not watch_f.empty and "ts_utc" in watch_f.columns:
+if not watch_f.empty:
     watch_daily = (
         watch_f.assign(day=watch_f["ts_utc"].dt.date)
         .groupby("day")
@@ -280,9 +328,9 @@ if not watch_f.empty and "ts_utc" in watch_f.columns:
     )
     t1.line_chart(watch_daily.set_index("day"))
 else:
-    t1.info("No watch data to chart (check file selection/date range).")
+    t1.info("No watch data to chart.")
 
-if not likes_f.empty and "ts_utc" in likes_f.columns:
+if not likes_f.empty:
     likes_daily = (
         likes_f.assign(day=likes_f["ts_utc"].dt.date)
         .groupby("day")
@@ -291,7 +339,7 @@ if not likes_f.empty and "ts_utc" in likes_f.columns:
     )
     t2.line_chart(likes_daily.set_index("day"))
 else:
-    t2.info("No likes data to chart (check file selection/date range).")
+    t2.info("No likes data to chart.")
 
 st.divider()
 
@@ -299,7 +347,7 @@ st.divider()
 st.subheader("Session behavior (based on Watch History)")
 gap_minutes = st.slider("Session gap (minutes)", 5, 120, 30, step=5)
 
-w_s = add_sessions(watch_f, gap_minutes=gap_minutes) if (not watch_f.empty and "ts_utc" in watch_f.columns) else pd.DataFrame()
+w_s = add_sessions(watch_f, gap_minutes=gap_minutes) if not watch_f.empty else pd.DataFrame()
 if not w_s.empty:
     session_stats = (
         w_s.groupby("session_id")
@@ -319,7 +367,7 @@ if not w_s.empty:
         hide_index=True,
     )
 else:
-    st.info("No sessions found (check Watch History file selection/date range).")
+    st.info("No sessions found.")
 
 st.divider()
 
@@ -331,7 +379,9 @@ num_cards = st.slider("Number of clips", 4, 40, 12, step=4)
 
 tab1, tab2 = st.tabs(["Watched", "Liked"])
 with tab1:
-    render_cards(watch_f, cards_per_row, num_cards)
+    render_cards(watch_f, cards_per_row, num_cards, load_thumbs=load_thumbs)
 with tab2:
-    render_cards(likes_f, cards_per_row, num_cards)
+    render_cards(likes_f, cards_per_row, num_cards, load_thumbs=load_thumbs)
+
+
 
