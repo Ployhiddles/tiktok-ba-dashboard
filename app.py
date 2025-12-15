@@ -1,10 +1,12 @@
 import re
 import zipfile
 from io import BytesIO
+import html as html_escape
 
 import pandas as pd
 import requests
 import streamlit as st
+import streamlit.components.v1 as components
 
 # ---------- Parsers ----------
 DATE_RE = re.compile(r"Date:\s*(.+?)\s*UTC")
@@ -64,8 +66,8 @@ def apply_date(df: pd.DataFrame, start_date, end_date) -> pd.DataFrame:
 @st.cache_data(show_spinner=False)
 def get_tiktok_oembed(url: str) -> dict:
     """
-    Fetch TikTok oEmbed metadata for a given video URL.
-    Returns {} on failure.
+    Uses TikTok oEmbed to get a thumbnail/title/author for a video URL.
+    If TikTok blocks requests on your network, it returns {} and we show a gradient cover.
     """
     try:
         api = "https://www.tiktok.com/oembed"
@@ -86,84 +88,8 @@ def get_tiktok_oembed(url: str) -> dict:
         pass
     return {}
 
-# ---------- App UI ----------
-st.set_page_config(page_title="Engagement & Retention Dashboard", layout="wide")
-
-st.title("Engagement & Retention Dashboard")
-st.caption("Business Analyst case study using anonymized interaction logs from a short-form video platform export.")
-
-# ---------- Card CSS (IMPORTANT: unsafe_allow_html=True) ----------
-st.markdown(
-    """
-    <style>
-      .clip-grid-card{
-        border-radius: 18px;
-        padding: 12px;
-        background: rgba(255,255,255,0.04);
-        border: 1px solid rgba(255,255,255,0.08);
-        box-shadow: 0 10px 30px rgba(0,0,0,0.25);
-        height: 270px;
-        display:flex;
-        flex-direction:column;
-        justify-content:space-between;
-        overflow:hidden;
-      }
-      .clip-cover{
-        border-radius: 14px;
-        height: 150px;
-        width: 100%;
-        border: 1px solid rgba(255,255,255,0.10);
-        overflow:hidden;
-      }
-      .clip-cover img{
-        width:100%;
-        height:150px;
-        object-fit:cover;
-        display:block;
-      }
-      .clip-meta{
-        margin-top: 10px;
-        line-height: 1.2;
-      }
-      .clip-title{
-        font-size: 13px;
-        font-weight: 600;
-        opacity: 0.95;
-        max-height: 34px;
-        overflow:hidden;
-      }
-      .clip-sub{
-        font-size: 12px;
-        opacity: 0.75;
-        margin-top: 4px;
-      }
-      .clip-id{
-        font-size: 11px;
-        opacity: 0.65;
-        margin-top: 4px;
-        word-break: break-all;
-      }
-      .clip-btn{
-        margin-top: 10px;
-        display:inline-block;
-        text-decoration:none;
-        padding: 8px 12px;
-        border-radius: 12px;
-        background: rgba(255,255,255,0.10);
-        border: 1px solid rgba(255,255,255,0.15);
-        color: white !important;
-        font-size: 13px;
-        text-align:center;
-      }
-      .clip-btn:hover{
-        background: rgba(255,255,255,0.16);
-      }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
-
-def render_clip_cards(df: pd.DataFrame, title: str, cards_per_row: int = 4, n: int = 12):
+# ---------- Components-based Card Grid (always renders HTML) ----------
+def render_clip_cards_components(df: pd.DataFrame, title: str, cards_per_row: int, n: int):
     st.markdown(f"**{title}**")
     if df.empty:
         st.info("No data in this date range.")
@@ -178,53 +104,162 @@ def render_clip_cards(df: pd.DataFrame, title: str, cards_per_row: int = 4, n: i
     )
     recent["time_utc"] = recent["ts_utc"].dt.strftime("%Y-%m-%d %H:%M")
 
-    rows = [recent.iloc[i:i + cards_per_row] for i in range(0, len(recent), cards_per_row)]
-    for chunk in rows:
-        cols = st.columns(cards_per_row, gap="large")
-        for i, (_, r) in enumerate(chunk.iterrows()):
-            url = r["url"]
-            vid = (r.get("video_id") or "")
-            time_utc = r["time_utc"]
+    cards = []
+    for _, r in recent.iterrows():
+        url = r["url"]
+        vid = r.get("video_id") or ""
+        time_utc = r["time_utc"]
 
-            meta = get_tiktok_oembed(url)
-            thumb = meta.get("thumbnail_url")
-            title_txt = meta.get("title") or "TikTok clip"
-            author = meta.get("author_name") or ""
+        meta = get_tiktok_oembed(url)
+        thumb = meta.get("thumbnail_url")
+        title_txt = meta.get("title") or "TikTok clip"
+        author = meta.get("author_name") or ""
 
-            safe_title = (title_txt[:60] + "…") if len(title_txt) > 60 else title_txt
+        # HTML escape text fields
+        safe_title = html_escape.escape(title_txt)
+        safe_author = html_escape.escape(author)
+        safe_vid = html_escape.escape(vid)
+        safe_time = html_escape.escape(time_utc)
+        safe_url = html_escape.escape(url)
 
-            if thumb:
-                cover_html = f"""
-                  <div class="clip-cover">
-                    <img src="{thumb}" alt="thumbnail" loading="lazy"/>
-                  </div>
-                """
-            else:
-                seed = sum(ord(c) for c in str(vid)) % 360
-                cover_html = f"""
-                  <div class="clip-cover" style="background: linear-gradient(135deg,
-                    hsla({seed},90%,60%,0.85),
-                    hsla({(seed+60)%360},90%,55%,0.70));">
-                  </div>
-                """
-
-            card_html = f"""
-              <div class="clip-grid-card">
-                {cover_html}
-                <div class="clip-meta">
-                  <div class="clip-title">{safe_title}</div>
-                  <div class="clip-sub">{time_utc} UTC{" • " + author if author else ""}</div>
-                  <div class="clip-id">Video ID: {vid if vid else "—"}</div>
-                  <a class="clip-btn" href="{url}" target="_blank" rel="noopener noreferrer">Open clip</a>
-                </div>
+        # thumbnail or gradient background
+        if thumb:
+            cover = f"""
+              <div class="cover">
+                <img src="{html_escape.escape(thumb)}" alt="thumb" loading="lazy" />
               </div>
             """
+        else:
+            seed = sum(ord(c) for c in str(vid)) % 360
+            cover = f"""
+              <div class="cover" style="
+                background: linear-gradient(135deg,
+                  hsla({seed},90%,60%,0.85),
+                  hsla({(seed+60)%360},90%,55%,0.70));
+              "></div>
+            """
 
-            # ✅ Critical: render HTML, not text
-            with cols[i]:
-                st.markdown(card_html, unsafe_allow_html=True)
+        cards.append(f"""
+          <div class="card">
+            {cover}
+            <div class="meta">
+              <div class="title">{safe_title}</div>
+              <div class="sub">{safe_time} UTC{(" • " + safe_author) if author else ""}</div>
+              <div class="id">Video ID: {safe_vid if vid else "—"}</div>
+              <a class="btn" href="{safe_url}" target="_blank" rel="noopener noreferrer">Open clip</a>
+            </div>
+          </div>
+        """)
 
-# ---------- Sidebar: Upload ZIP ----------
+    grid_html = f"""
+    <!doctype html>
+    <html>
+    <head>
+      <meta charset="utf-8" />
+      <style>
+        :root {{
+          color-scheme: dark;
+        }}
+        body {{
+          margin: 0;
+          padding: 0;
+          font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+          background: transparent;
+          color: white;
+        }}
+        .grid {{
+          display: grid;
+          grid-template-columns: repeat({cards_per_row}, 1fr);
+          gap: 16px;
+        }}
+        .card {{
+          border-radius: 18px;
+          padding: 12px;
+          background: rgba(255,255,255,0.04);
+          border: 1px solid rgba(255,255,255,0.08);
+          box-shadow: 0 10px 30px rgba(0,0,0,0.25);
+          height: 270px;
+          display:flex;
+          flex-direction:column;
+          justify-content:space-between;
+          overflow:hidden;
+        }}
+        .cover {{
+          border-radius: 14px;
+          height: 150px;
+          width: 100%;
+          border: 1px solid rgba(255,255,255,0.10);
+          overflow:hidden;
+          background: rgba(255,255,255,0.06);
+        }}
+        .cover img {{
+          width: 100%;
+          height: 150px;
+          object-fit: cover;
+          display: block;
+        }}
+        .meta {{
+          margin-top: 10px;
+          line-height: 1.2;
+        }}
+        .title {{
+          font-size: 13px;
+          font-weight: 650;
+          opacity: 0.95;
+          max-height: 34px;
+          overflow: hidden;
+        }}
+        .sub {{
+          font-size: 12px;
+          opacity: 0.75;
+          margin-top: 4px;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }}
+        .id {{
+          font-size: 11px;
+          opacity: 0.65;
+          margin-top: 4px;
+          word-break: break-all;
+        }}
+        .btn {{
+          margin-top: 10px;
+          display: inline-block;
+          text-decoration: none;
+          padding: 8px 12px;
+          border-radius: 12px;
+          background: rgba(255,255,255,0.10);
+          border: 1px solid rgba(255,255,255,0.15);
+          color: white;
+          font-size: 13px;
+          text-align: center;
+        }}
+        .btn:hover {{
+          background: rgba(255,255,255,0.16);
+        }}
+      </style>
+    </head>
+    <body>
+      <div class="grid">
+        {''.join(cards)}
+      </div>
+    </body>
+    </html>
+    """
+
+    # Height: roughly 270px per row + gaps; keep it comfy
+    rows = (len(recent) + cards_per_row - 1) // cards_per_row
+    height = min(1200, rows * 290 + 10)
+
+    components.html(grid_html, height=height, scrolling=False)
+
+# ---------- App ----------
+st.set_page_config(page_title="Engagement & Retention Dashboard", layout="wide")
+st.title("Engagement & Retention Dashboard")
+st.caption("Business Analyst case study using anonymized interaction logs from a short-form video platform export.")
+
+# Upload ZIP
 st.sidebar.header("1) Upload your TikTok export")
 uploaded = st.sidebar.file_uploader("Upload ZIP", type=["zip"])
 if not uploaded:
@@ -233,7 +268,7 @@ if not uploaded:
 
 zip_bytes = uploaded.getvalue()
 
-# ---------- Sidebar: Choose files inside ZIP ----------
+# Choose files inside ZIP
 all_paths = list_zip_paths(zip_bytes)
 
 st.sidebar.header("2) Select files inside the ZIP")
@@ -245,7 +280,7 @@ likes_path = st.sidebar.selectbox("Like List file", likes_candidates if likes_ca
 
 watch, likes = load_data(zip_bytes, watch_path, likes_path)
 
-# ---------- Date filters ----------
+# Date filters
 min_dt = min([df["ts_utc"].min() for df in [watch, likes] if not df.empty], default=None)
 max_dt = max([df["ts_utc"].max() for df in [watch, likes] if not df.empty], default=None)
 
@@ -258,7 +293,7 @@ with c2:
 watch_f = apply_date(watch, start, end)
 likes_f = apply_date(likes, start, end)
 
-# ---------- KPIs ----------
+# KPIs
 watch_days = watch_f["ts_utc"].dt.date.nunique() if not watch_f.empty else 0
 total_watches = len(watch_f)
 total_likes = len(likes_f)
@@ -275,7 +310,7 @@ k4.metric("Watch → Like conversion", f"{watch_to_like:.1%}")
 
 st.divider()
 
-# ---------- Trends ----------
+# Trends
 st.subheader("Trends")
 t1, t2 = st.columns(2)
 
@@ -303,7 +338,7 @@ else:
 
 st.divider()
 
-# ---------- Sessions ----------
+# Sessions
 st.subheader("Session behavior (based on watch history)")
 gap_minutes = st.slider("Session gap (minutes)", min_value=5, max_value=120, value=30, step=5)
 
@@ -331,15 +366,15 @@ else:
 
 st.divider()
 
-# ---------- TikTok clip links (Cards with thumbnails) ----------
+# Clip cards with thumbnails (NO raw HTML text)
 st.subheader("TikTok clip links")
 cards_per_row = st.slider("Cards per row", min_value=2, max_value=5, value=4, step=1)
 num_cards = st.slider("How many clips to show", min_value=4, max_value=40, value=12, step=4)
 
 tab1, tab2 = st.tabs(["Most recent watched", "Most recent liked"])
 with tab1:
-    render_clip_cards(watch_f, "Watched clips", cards_per_row=cards_per_row, n=num_cards)
+    render_clip_cards_components(watch_f, "Watched clips", cards_per_row=cards_per_row, n=num_cards)
 with tab2:
-    render_clip_cards(likes_f, "Liked clips", cards_per_row=cards_per_row, n=num_cards)
+    render_clip_cards_components(likes_f, "Liked clips", cards_per_row=cards_per_row, n=num_cards)
 
 
