@@ -69,7 +69,12 @@ def get_tiktok_oembed(url: str) -> dict:
     """
     try:
         api = "https://www.tiktok.com/oembed"
-        r = requests.get(api, params={"url": url}, timeout=8, headers={"User-Agent": "Mozilla/5.0"})
+        r = requests.get(
+            api,
+            params={"url": url},
+            timeout=8,
+            headers={"User-Agent": "Mozilla/5.0"},
+        )
         if r.status_code == 200:
             data = r.json()
             return {
@@ -81,9 +86,13 @@ def get_tiktok_oembed(url: str) -> dict:
         pass
     return {}
 
-# ---------- Card UI ----------
+# ---------- App UI ----------
 st.set_page_config(page_title="Engagement & Retention Dashboard", layout="wide")
 
+st.title("Engagement & Retention Dashboard")
+st.caption("Business Analyst case study using anonymized interaction logs from a short-form video platform export.")
+
+# ---------- Card CSS (IMPORTANT: unsafe_allow_html=True) ----------
 st.markdown(
     """
     <style>
@@ -169,7 +178,7 @@ def render_clip_cards(df: pd.DataFrame, title: str, cards_per_row: int = 4, n: i
     )
     recent["time_utc"] = recent["ts_utc"].dt.strftime("%Y-%m-%d %H:%M")
 
-    rows = [recent.iloc[i:i+cards_per_row] for i in range(0, len(recent), cards_per_row)]
+    rows = [recent.iloc[i:i + cards_per_row] for i in range(0, len(recent), cards_per_row)]
     for chunk in rows:
         cols = st.columns(cards_per_row, gap="large")
         for i, (_, r) in enumerate(chunk.iterrows()):
@@ -182,24 +191,22 @@ def render_clip_cards(df: pd.DataFrame, title: str, cards_per_row: int = 4, n: i
             title_txt = meta.get("title") or "TikTok clip"
             author = meta.get("author_name") or ""
 
+            safe_title = (title_txt[:60] + "…") if len(title_txt) > 60 else title_txt
+
             if thumb:
                 cover_html = f"""
-                    <div class="clip-cover">
-                      <img src="{thumb}" alt="thumbnail" loading="lazy" />
-                    </div>
+                  <div class="clip-cover">
+                    <img src="{thumb}" alt="thumbnail" loading="lazy"/>
+                  </div>
                 """
             else:
-                # fallback gradient if thumbnail fails
                 seed = sum(ord(c) for c in str(vid)) % 360
                 cover_html = f"""
-                    <div class="clip-cover" style="background: linear-gradient(135deg,
-                      hsla({seed},90%,60%,0.85),
-                      hsla({(seed+60)%360},90%,55%,0.70));">
-                    </div>
+                  <div class="clip-cover" style="background: linear-gradient(135deg,
+                    hsla({seed},90%,60%,0.85),
+                    hsla({(seed+60)%360},90%,55%,0.70));">
+                  </div>
                 """
-
-            # keep title short so cards stay clean
-            safe_title = (title_txt[:60] + "…") if len(title_txt) > 60 else title_txt
 
             card_html = f"""
               <div class="clip-grid-card">
@@ -212,14 +219,12 @@ def render_clip_cards(df: pd.DataFrame, title: str, cards_per_row: int = 4, n: i
                 </div>
               </div>
             """
+
+            # ✅ Critical: render HTML, not text
             with cols[i]:
                 st.markdown(card_html, unsafe_allow_html=True)
 
-# ---------- App ----------
-st.title("Engagement & Retention Dashboard")
-st.caption("Business Analyst case study using anonymized interaction logs from a short-form video platform export.")
-
-# 1) Upload ZIP (GitHub + Streamlit Cloud friendly)
+# ---------- Sidebar: Upload ZIP ----------
 st.sidebar.header("1) Upload your TikTok export")
 uploaded = st.sidebar.file_uploader("Upload ZIP", type=["zip"])
 if not uploaded:
@@ -228,7 +233,7 @@ if not uploaded:
 
 zip_bytes = uploaded.getvalue()
 
-# 2) Choose files inside ZIP
+# ---------- Sidebar: Choose files inside ZIP ----------
 all_paths = list_zip_paths(zip_bytes)
 
 st.sidebar.header("2) Select files inside the ZIP")
@@ -240,7 +245,7 @@ likes_path = st.sidebar.selectbox("Like List file", likes_candidates if likes_ca
 
 watch, likes = load_data(zip_bytes, watch_path, likes_path)
 
-# Date filters
+# ---------- Date filters ----------
 min_dt = min([df["ts_utc"].min() for df in [watch, likes] if not df.empty], default=None)
 max_dt = max([df["ts_utc"].max() for df in [watch, likes] if not df.empty], default=None)
 
@@ -253,7 +258,7 @@ with c2:
 watch_f = apply_date(watch, start, end)
 likes_f = apply_date(likes, start, end)
 
-# KPIs
+# ---------- KPIs ----------
 watch_days = watch_f["ts_utc"].dt.date.nunique() if not watch_f.empty else 0
 total_watches = len(watch_f)
 total_likes = len(likes_f)
@@ -270,7 +275,7 @@ k4.metric("Watch → Like conversion", f"{watch_to_like:.1%}")
 
 st.divider()
 
-# Trends
+# ---------- Trends ----------
 st.subheader("Trends")
 t1, t2 = st.columns(2)
 
@@ -298,7 +303,7 @@ else:
 
 st.divider()
 
-# Sessions
+# ---------- Sessions ----------
 st.subheader("Session behavior (based on watch history)")
 gap_minutes = st.slider("Session gap (minutes)", min_value=5, max_value=120, value=30, step=5)
 
@@ -326,7 +331,7 @@ else:
 
 st.divider()
 
-# TikTok clip links (thumbnail card grid)
+# ---------- TikTok clip links (Cards with thumbnails) ----------
 st.subheader("TikTok clip links")
 cards_per_row = st.slider("Cards per row", min_value=2, max_value=5, value=4, step=1)
 num_cards = st.slider("How many clips to show", min_value=4, max_value=40, value=12, step=4)
