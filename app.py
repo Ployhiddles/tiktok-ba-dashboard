@@ -1,8 +1,10 @@
 import re
 import zipfile
-import pandas as pd
-import streamlit as st
 from io import BytesIO
+
+import pandas as pd
+import requests
+import streamlit as st
 
 # ---------- Parsers ----------
 DATE_RE = re.compile(r"Date:\s*(.+?)\s*UTC")
@@ -18,9 +20,7 @@ def parse_date_link_txt(text: str) -> pd.DataFrame:
     n = min(len(dates), len(links))
     rows = []
     for i in range(n):
-        rows.append(
-            {"ts_utc": dates[i], "url": links[i], "video_id": extract_video_id(links[i])}
-        )
+        rows.append({"ts_utc": dates[i], "url": links[i], "video_id": extract_video_id(links[i])})
     df = pd.DataFrame(rows)
     if df.empty:
         return df
@@ -60,17 +60,40 @@ def apply_date(df: pd.DataFrame, start_date, end_date) -> pd.DataFrame:
     mask = (df["ts_utc"].dt.date >= start_date) & (df["ts_utc"].dt.date <= end_date)
     return df.loc[mask].copy()
 
-# ---------- Card Grid UI ----------
+# ---------- TikTok Thumbnail via oEmbed ----------
+@st.cache_data(show_spinner=False)
+def get_tiktok_oembed(url: str) -> dict:
+    """
+    Fetch TikTok oEmbed metadata for a given video URL.
+    Returns {} on failure.
+    """
+    try:
+        api = "https://www.tiktok.com/oembed"
+        r = requests.get(api, params={"url": url}, timeout=8, headers={"User-Agent": "Mozilla/5.0"})
+        if r.status_code == 200:
+            data = r.json()
+            return {
+                "thumbnail_url": data.get("thumbnail_url"),
+                "title": data.get("title"),
+                "author_name": data.get("author_name"),
+            }
+    except Exception:
+        pass
+    return {}
+
+# ---------- Card UI ----------
+st.set_page_config(page_title="Engagement & Retention Dashboard", layout="wide")
+
 st.markdown(
     """
     <style>
       .clip-grid-card{
-        border-radius: 16px;
-        padding: 14px;
+        border-radius: 18px;
+        padding: 12px;
         background: rgba(255,255,255,0.04);
         border: 1px solid rgba(255,255,255,0.08);
         box-shadow: 0 10px 30px rgba(0,0,0,0.25);
-        height: 220px;
+        height: 270px;
         display:flex;
         flex-direction:column;
         justify-content:space-between;
@@ -78,21 +101,36 @@ st.markdown(
       }
       .clip-cover{
         border-radius: 14px;
-        height: 120px;
+        height: 150px;
         width: 100%;
         border: 1px solid rgba(255,255,255,0.10);
+        overflow:hidden;
+      }
+      .clip-cover img{
+        width:100%;
+        height:150px;
+        object-fit:cover;
+        display:block;
       }
       .clip-meta{
         margin-top: 10px;
-        line-height: 1.25;
+        line-height: 1.2;
       }
-      .clip-time{
+      .clip-title{
+        font-size: 13px;
+        font-weight: 600;
+        opacity: 0.95;
+        max-height: 34px;
+        overflow:hidden;
+      }
+      .clip-sub{
         font-size: 12px;
-        opacity: 0.8;
+        opacity: 0.75;
+        margin-top: 4px;
       }
       .clip-id{
-        font-size: 12px;
-        opacity: 0.7;
+        font-size: 11px;
+        opacity: 0.65;
         margin-top: 4px;
         word-break: break-all;
       }
@@ -135,31 +173,53 @@ def render_clip_cards(df: pd.DataFrame, title: str, cards_per_row: int = 4, n: i
     for chunk in rows:
         cols = st.columns(cards_per_row, gap="large")
         for i, (_, r) in enumerate(chunk.iterrows()):
+            url = r["url"]
             vid = (r.get("video_id") or "")
-            seed = sum(ord(c) for c in str(vid)) % 360
-            cover_style = (
-                f"background: linear-gradient(135deg, "
-                f"hsla({seed},90%,60%,0.85), hsla({(seed+60)%360},90%,55%,0.70));"
-            )
+            time_utc = r["time_utc"]
+
+            meta = get_tiktok_oembed(url)
+            thumb = meta.get("thumbnail_url")
+            title_txt = meta.get("title") or "TikTok clip"
+            author = meta.get("author_name") or ""
+
+            if thumb:
+                cover_html = f"""
+                    <div class="clip-cover">
+                      <img src="{thumb}" alt="thumbnail" loading="lazy" />
+                    </div>
+                """
+            else:
+                # fallback gradient if thumbnail fails
+                seed = sum(ord(c) for c in str(vid)) % 360
+                cover_html = f"""
+                    <div class="clip-cover" style="background: linear-gradient(135deg,
+                      hsla({seed},90%,60%,0.85),
+                      hsla({(seed+60)%360},90%,55%,0.70));">
+                    </div>
+                """
+
+            # keep title short so cards stay clean
+            safe_title = (title_txt[:60] + "…") if len(title_txt) > 60 else title_txt
+
             card_html = f"""
               <div class="clip-grid-card">
-                <div class="clip-cover" style="{cover_style}"></div>
+                {cover_html}
                 <div class="clip-meta">
-                  <div class="clip-time">{r['time_utc']} UTC</div>
+                  <div class="clip-title">{safe_title}</div>
+                  <div class="clip-sub">{time_utc} UTC{" • " + author if author else ""}</div>
                   <div class="clip-id">Video ID: {vid if vid else "—"}</div>
-                  <a class="clip-btn" href="{r['url']}" target="_blank" rel="noopener noreferrer">Open clip</a>
+                  <a class="clip-btn" href="{url}" target="_blank" rel="noopener noreferrer">Open clip</a>
                 </div>
               </div>
             """
             with cols[i]:
                 st.markdown(card_html, unsafe_allow_html=True)
 
-# ---------- Streamlit App ----------
-st.set_page_config(page_title="Engagement & Retention Dashboard", layout="wide")
+# ---------- App ----------
 st.title("Engagement & Retention Dashboard")
 st.caption("Business Analyst case study using anonymized interaction logs from a short-form video platform export.")
 
-# 1) Upload ZIP (works for GitHub + Streamlit Cloud)
+# 1) Upload ZIP (GitHub + Streamlit Cloud friendly)
 st.sidebar.header("1) Upload your TikTok export")
 uploaded = st.sidebar.file_uploader("Upload ZIP", type=["zip"])
 if not uploaded:
@@ -266,13 +326,15 @@ else:
 
 st.divider()
 
-# TikTok clip links (card grid like your screenshot)
+# TikTok clip links (thumbnail card grid)
 st.subheader("TikTok clip links")
+cards_per_row = st.slider("Cards per row", min_value=2, max_value=5, value=4, step=1)
+num_cards = st.slider("How many clips to show", min_value=4, max_value=40, value=12, step=4)
+
 tab1, tab2 = st.tabs(["Most recent watched", "Most recent liked"])
-
 with tab1:
-    render_clip_cards(watch_f, "Watched clips", cards_per_row=4, n=12)
-
+    render_clip_cards(watch_f, "Watched clips", cards_per_row=cards_per_row, n=num_cards)
 with tab2:
-    render_clip_cards(likes_f, "Liked clips", cards_per_row=4, n=12)
+    render_clip_cards(likes_f, "Liked clips", cards_per_row=cards_per_row, n=num_cards)
+
 
