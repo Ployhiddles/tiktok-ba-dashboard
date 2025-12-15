@@ -2,8 +2,9 @@ import re
 import zipfile
 import pandas as pd
 import streamlit as st
+from io import BytesIO
 
-# --------- Parsers ---------
+# ---------- Parsers ----------
 DATE_RE = re.compile(r"Date:\s*(.+?)\s*UTC")
 LINK_RE = re.compile(r"Link:\s*(https?://\S+)")
 
@@ -18,11 +19,7 @@ def parse_date_link_txt(text: str) -> pd.DataFrame:
     rows = []
     for i in range(n):
         rows.append(
-            {
-                "ts_utc": dates[i],
-                "url": links[i],
-                "video_id": extract_video_id(links[i]),
-            }
+            {"ts_utc": dates[i], "url": links[i], "video_id": extract_video_id(links[i])}
         )
     df = pd.DataFrame(rows)
     if df.empty:
@@ -36,13 +33,12 @@ def read_zip_txt(zf: zipfile.ZipFile, path: str) -> str:
 
 @st.cache_data
 def list_zip_paths(zip_bytes: bytes):
-    with zipfile.ZipFile(pd.io.common.BytesIO(zip_bytes)) as zf:
+    with zipfile.ZipFile(BytesIO(zip_bytes)) as zf:
         return zf.namelist()
 
 @st.cache_data
 def load_data(zip_bytes: bytes, watch_path: str, likes_path: str):
-    bio = pd.io.common.BytesIO(zip_bytes)
-    with zipfile.ZipFile(bio) as zf:
+    with zipfile.ZipFile(BytesIO(zip_bytes)) as zf:
         watch_txt = read_zip_txt(zf, watch_path)
         likes_txt = read_zip_txt(zf, likes_path)
     watch = parse_date_link_txt(watch_txt)
@@ -64,24 +60,106 @@ def apply_date(df: pd.DataFrame, start_date, end_date) -> pd.DataFrame:
     mask = (df["ts_utc"].dt.date >= start_date) & (df["ts_utc"].dt.date <= end_date)
     return df.loc[mask].copy()
 
-def make_links_table(df: pd.DataFrame, n: int = 30) -> pd.DataFrame:
-    if df.empty:
-        return df
-    out = (
-        df.sort_values("ts_utc", ascending=False)
-        .dropna(subset=["url"])
-        .drop_duplicates(subset=["url"])
-        .head(n)
-        .copy()
-    )
-    out["time_utc"] = out["ts_utc"].dt.strftime("%Y-%m-%d %H:%M")
-    return out[["time_utc", "url", "video_id"]]
+# ---------- Card Grid UI ----------
+st.markdown(
+    """
+    <style>
+      .clip-grid-card{
+        border-radius: 16px;
+        padding: 14px;
+        background: rgba(255,255,255,0.04);
+        border: 1px solid rgba(255,255,255,0.08);
+        box-shadow: 0 10px 30px rgba(0,0,0,0.25);
+        height: 220px;
+        display:flex;
+        flex-direction:column;
+        justify-content:space-between;
+        overflow:hidden;
+      }
+      .clip-cover{
+        border-radius: 14px;
+        height: 120px;
+        width: 100%;
+        border: 1px solid rgba(255,255,255,0.10);
+      }
+      .clip-meta{
+        margin-top: 10px;
+        line-height: 1.25;
+      }
+      .clip-time{
+        font-size: 12px;
+        opacity: 0.8;
+      }
+      .clip-id{
+        font-size: 12px;
+        opacity: 0.7;
+        margin-top: 4px;
+        word-break: break-all;
+      }
+      .clip-btn{
+        margin-top: 10px;
+        display:inline-block;
+        text-decoration:none;
+        padding: 8px 12px;
+        border-radius: 12px;
+        background: rgba(255,255,255,0.10);
+        border: 1px solid rgba(255,255,255,0.15);
+        color: white !important;
+        font-size: 13px;
+        text-align:center;
+      }
+      .clip-btn:hover{
+        background: rgba(255,255,255,0.16);
+      }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
-# --------- UI ---------
+def render_clip_cards(df: pd.DataFrame, title: str, cards_per_row: int = 4, n: int = 12):
+    st.markdown(f"**{title}**")
+    if df.empty:
+        st.info("No data in this date range.")
+        return
+
+    recent = (
+        df.sort_values("ts_utc", ascending=False)
+          .dropna(subset=["url"])
+          .drop_duplicates(subset=["url"])
+          .head(n)
+          .copy()
+    )
+    recent["time_utc"] = recent["ts_utc"].dt.strftime("%Y-%m-%d %H:%M")
+
+    rows = [recent.iloc[i:i+cards_per_row] for i in range(0, len(recent), cards_per_row)]
+    for chunk in rows:
+        cols = st.columns(cards_per_row, gap="large")
+        for i, (_, r) in enumerate(chunk.iterrows()):
+            vid = (r.get("video_id") or "")
+            seed = sum(ord(c) for c in str(vid)) % 360
+            cover_style = (
+                f"background: linear-gradient(135deg, "
+                f"hsla({seed},90%,60%,0.85), hsla({(seed+60)%360},90%,55%,0.70));"
+            )
+            card_html = f"""
+              <div class="clip-grid-card">
+                <div class="clip-cover" style="{cover_style}"></div>
+                <div class="clip-meta">
+                  <div class="clip-time">{r['time_utc']} UTC</div>
+                  <div class="clip-id">Video ID: {vid if vid else "—"}</div>
+                  <a class="clip-btn" href="{r['url']}" target="_blank" rel="noopener noreferrer">Open clip</a>
+                </div>
+              </div>
+            """
+            with cols[i]:
+                st.markdown(card_html, unsafe_allow_html=True)
+
+# ---------- Streamlit App ----------
 st.set_page_config(page_title="Engagement & Retention Dashboard", layout="wide")
 st.title("Engagement & Retention Dashboard")
 st.caption("Business Analyst case study using anonymized interaction logs from a short-form video platform export.")
 
+# 1) Upload ZIP (works for GitHub + Streamlit Cloud)
 st.sidebar.header("1) Upload your TikTok export")
 uploaded = st.sidebar.file_uploader("Upload ZIP", type=["zip"])
 if not uploaded:
@@ -90,21 +168,15 @@ if not uploaded:
 
 zip_bytes = uploaded.getvalue()
 
-# List internal ZIP paths
+# 2) Choose files inside ZIP
 all_paths = list_zip_paths(zip_bytes)
 
 st.sidebar.header("2) Select files inside the ZIP")
 watch_candidates = [p for p in all_paths if p.lower().endswith("watch history.txt")]
 likes_candidates = [p for p in all_paths if p.lower().endswith("like list.txt")]
 
-watch_path = st.sidebar.selectbox(
-    "Watch History file",
-    watch_candidates if watch_candidates else all_paths,
-)
-likes_path = st.sidebar.selectbox(
-    "Like List file",
-    likes_candidates if likes_candidates else all_paths,
-)
+watch_path = st.sidebar.selectbox("Watch History file", watch_candidates if watch_candidates else all_paths)
+likes_path = st.sidebar.selectbox("Like List file", likes_candidates if likes_candidates else all_paths)
 
 watch, likes = load_data(zip_bytes, watch_path, likes_path)
 
@@ -194,56 +266,13 @@ else:
 
 st.divider()
 
-# TikTok clip links
+# TikTok clip links (card grid like your screenshot)
 st.subheader("TikTok clip links")
 tab1, tab2 = st.tabs(["Most recent watched", "Most recent liked"])
 
 with tab1:
-    if watch_f.empty:
-        st.info("No watch history in this date range.")
-    else:
-        recent_watch = make_links_table(watch_f, n=30)
-        try:
-            st.data_editor(
-                recent_watch,
-                use_container_width=True,
-                hide_index=True,
-                disabled=True,
-                column_config={
-                    "url": st.column_config.LinkColumn(
-                        "TikTok link",
-                        help="Click to open the clip",
-                        display_text="Open clip",
-                    ),
-                    "time_utc": st.column_config.TextColumn("Time (UTC)"),
-                    "video_id": st.column_config.TextColumn("Video ID"),
-                },
-            )
-        except Exception:
-            for _, r in recent_watch.iterrows():
-                st.markdown(f"- {r['time_utc']} — [Open clip]({r['url']})")
+    render_clip_cards(watch_f, "Watched clips", cards_per_row=4, n=12)
 
 with tab2:
-    if likes_f.empty:
-        st.info("No likes in this date range.")
-    else:
-        recent_likes = make_links_table(likes_f, n=30)
-        try:
-            st.data_editor(
-                recent_likes,
-                use_container_width=True,
-                hide_index=True,
-                disabled=True,
-                column_config={
-                    "url": st.column_config.LinkColumn(
-                        "TikTok link",
-                        help="Click to open the clip",
-                        display_text="Open clip",
-                    ),
-                    "time_utc": st.column_config.TextColumn("Time (UTC)"),
-                    "video_id": st.column_config.TextColumn("Video ID"),
-                },
-            )
-        except Exception:
-            for _, r in recent_likes.iterrows():
-                st.markdown(f"- {r['time_utc']} — [Open clip]({r['url']})")
+    render_clip_cards(likes_f, "Liked clips", cards_per_row=4, n=12)
+
