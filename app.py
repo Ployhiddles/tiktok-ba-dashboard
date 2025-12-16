@@ -4,7 +4,6 @@ from io import BytesIO
 import html
 
 import pandas as pd
-import requests
 import streamlit as st
 import streamlit.components.v1 as components
 
@@ -60,84 +59,98 @@ def add_sessions(watch: pd.DataFrame, gap_minutes: int = 30) -> pd.DataFrame:
     w["session_id"] = w["new_session"].cumsum()
     return w
 
-# -------------------- TikTok oEmbed --------------------
-@st.cache_data(show_spinner=False)
-def get_tiktok_oembed(url: str):
-    """
-    Returns: {thumb,title,author} or {} if blocked/rate-limited/unavailable.
-    """
-    try:
-        r = requests.get(
-            "https://www.tiktok.com/oembed",
-            params={"url": url},
-            timeout=8,
-            headers={"User-Agent": "Mozilla/5.0"},
-        )
-        if r.status_code == 200:
-            j = r.json()
-            return {
-                "thumb": j.get("thumbnail_url"),
-                "title": j.get("title"),
-                "author": j.get("author_name"),
-            }
-    except Exception:
-        pass
-    return {}
-
-# -------------------- Card Grid (HTML component) --------------------
-def render_cards(df: pd.DataFrame, cards_per_row: int, n: int, load_thumbs: bool):
+# -------------------- CARD GRID (CLIENT-SIDE oEmbed) --------------------
+def render_cards_client_oembed(df: pd.DataFrame, cards_per_row: int, n: int, load_thumbs: bool):
     required = {"ts_utc", "url"}
     if df is None or df.empty:
-        st.info("No rows to show (empty). Try widening the date range or selecting the correct file.")
+        st.info("No rows to show. Try widening the date range or selecting the correct file.")
         return
     if not required.issubset(set(df.columns)):
-        st.error(f"Selected file didn’t parse into expected columns. Found columns: {list(df.columns)}")
+        st.error(f"Selected file didn’t parse correctly. Found columns: {list(df.columns)}")
         return
 
     recent = (
         df.sort_values("ts_utc", ascending=False)
-        .dropna(subset=["url"])
-        .drop_duplicates(subset=["url"])
-        .head(n)
-        .copy()
+          .dropna(subset=["url"])
+          .drop_duplicates(subset=["url"])
+          .head(n)
+          .copy()
     )
 
-    cards_html = ""
+    # Build placeholders; JS fills thumb/title/author
+    card_divs = []
     for _, r in recent.iterrows():
-        url_raw = str(r["url"])
-        meta = get_tiktok_oembed(url_raw) if load_thumbs else {}
-
-        thumb = meta.get("thumb")
-        title_txt = meta.get("title") or "TikTok clip"
-        author_txt = meta.get("author") or ""
-
-        title = html.escape(title_txt)
-        author = html.escape(author_txt)
+        url = html.escape(str(r["url"]))
         time = pd.to_datetime(r["ts_utc"], utc=True).strftime("%Y-%m-%d %H:%M")
-        url = html.escape(url_raw)
 
-        # Cover: thumbnail if available, else gradient
-        if thumb:
-            cover = f'<img src="{html.escape(thumb)}" />'
-        else:
-            vid = str(r.get("video_id") or "")
-            seed = sum(ord(c) for c in vid) % 360
-            cover = f'''
-              <div style="width:100%;height:100%;
-              background:linear-gradient(135deg,
-              hsla({seed},90%,60%,.85),
-              hsla({(seed+60)%360},90%,55%,.7));"></div>
-            '''
-
-        cards_html += f"""
-        <div class="card">
-          <div class="cover">{cover}</div>
-          <div class="meta">
-            <div class="title">{title}</div>
-            <div class="sub">{time} UTC{(" • " + author) if author_txt else ""}</div>
-            <a class="btn" href="{url}" target="_blank" rel="noopener noreferrer">Open clip</a>
+        card_divs.append(f"""
+          <div class="card" data-url="{url}">
+            <div class="cover placeholder"></div>
+            <div class="meta">
+              <div class="title">{"Loading…" if load_thumbs else "TikTok clip"}</div>
+              <div class="sub">{time} UTC</div>
+              <a class="btn" href="{url}" target="_blank" rel="noopener noreferrer">Open clip</a>
+            </div>
           </div>
-        </div>
+        """)
+
+    # If user disables thumbnails, do not run JS fetch at all.
+    js_block = ""
+    if load_thumbs:
+        js_block = r"""
+        <script>
+          async function fetchOembed(url) {
+            const api = "https://www.tiktok.com/oembed?url=" + encodeURIComponent(url);
+            const res = await fetch(api);
+            if (!res.ok) throw new Error("oEmbed failed: " + res.status);
+            return await res.json();
+          }
+
+          // Concurrency limiter to reduce rate-limit issues
+          async function runLimited(tasks, limit=4) {
+            const results = [];
+            let i = 0;
+            const workers = new Array(limit).fill(0).map(async () => {
+              while (i < tasks.length) {
+                const idx = i++;
+                try { results[idx] = await tasks[idx](); }
+                catch(e) { results[idx] = null; }
+              }
+            });
+            await Promise.all(workers);
+            return results;
+          }
+
+          const cards = Array.from(document.querySelectorAll(".card"));
+          const tasks = cards.map(card => async () => {
+            const url = card.dataset.url;
+            const data = await fetchOembed(url);
+
+            const thumb = data.thumbnail_url;
+            const title = data.title || "TikTok clip";
+            const author = data.author_name || "";
+
+            // Update title + author
+            const titleEl = card.querySelector(".title");
+            titleEl.textContent = title;
+
+            const subEl = card.querySelector(".sub");
+            if (author) subEl.textContent = subEl.textContent + " • " + author;
+
+            // Update cover
+            if (thumb) {
+              const cover = card.querySelector(".cover");
+              cover.classList.remove("placeholder");
+              cover.innerHTML = "";
+              const img = document.createElement("img");
+              img.src = thumb;
+              img.loading = "lazy";
+              cover.appendChild(img);
+            }
+          });
+
+          runLimited(tasks, 4);
+        </script>
         """
 
     html_doc = f"""
@@ -150,14 +163,13 @@ def render_cards(df: pd.DataFrame, cards_per_row: int, n: int, load_thumbs: bool
         color:white;
         font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
       }}
-
       .grid {{
         display:grid;
         grid-template-columns:repeat({cards_per_row},1fr);
         gap:18px;
       }}
 
-      /* Square card + hover scale/glow */
+      /* Square card + hover */
       .card {{
         aspect-ratio:1/1;
         padding:12px;
@@ -170,7 +182,6 @@ def render_cards(df: pd.DataFrame, cards_per_row: int, n: int, load_thumbs: bool
         overflow:hidden;
         transition:transform .25s, box-shadow .25s, border-color .25s;
       }}
-
       .card:hover {{
         transform:scale(1.05);
         box-shadow:
@@ -186,29 +197,32 @@ def render_cards(df: pd.DataFrame, cards_per_row: int, n: int, load_thumbs: bool
         border-radius:14px;
         border:1px solid rgba(255,255,255,.10);
         background:rgba(255,255,255,.06);
+        position:relative;
+      }}
+
+      /* Placeholder gradient */
+      .placeholder {{
+        background:linear-gradient(135deg, rgba(170,70,255,.75), rgba(255,70,160,.55));
       }}
 
       .cover img {{
         width:100%;
         height:100%;
         object-fit:cover;
-        transition:transform .35s;
         display:block;
+        transition:transform .35s;
       }}
-
       .card:hover .cover img {{
         transform:scale(1.08);
       }}
 
       .meta {{ margin-top:8px; }}
-
       .title {{
         font-size:13px;
         font-weight:650;
         max-height:34px;
         overflow:hidden;
       }}
-
       .sub {{
         font-size:12px;
         opacity:.75;
@@ -216,7 +230,6 @@ def render_cards(df: pd.DataFrame, cards_per_row: int, n: int, load_thumbs: bool
         overflow:hidden;
         text-overflow:ellipsis;
       }}
-
       .btn {{
         margin-top:8px;
         display:block;
@@ -228,13 +241,16 @@ def render_cards(df: pd.DataFrame, cards_per_row: int, n: int, load_thumbs: bool
         color:white;
         text-decoration:none;
       }}
-
       .btn:hover {{
         background:rgba(255,255,255,.18);
       }}
     </style>
+
     <body>
-      <div class="grid">{cards_html}</div>
+      <div class="grid">
+        {''.join(card_divs)}
+      </div>
+      {js_block}
     </body>
     </html>
     """
@@ -243,15 +259,17 @@ def render_cards(df: pd.DataFrame, cards_per_row: int, n: int, load_thumbs: bool
     height = min(1400, rows * 330 + 20)
     components.html(html_doc, height=height, scrolling=False)
 
-# -------------------- APP --------------------
+# -------------------- STREAMLIT APP --------------------
 st.set_page_config(layout="wide")
 st.title("Engagement & Retention Dashboard")
 
 st.info(
     "📦 Upload your **TikTok data export ZIP**. "
-    "Then select **Watch History** and **Like List** files from the sidebar."
+    "Select **Watch History** + **Like List** in the sidebar. "
+    "Thumbnails/titles load in your browser (more reliable on Streamlit Cloud)."
 )
 
+# Sidebar upload
 uploaded = st.sidebar.file_uploader("Upload TikTok ZIP", type=["zip"])
 if not uploaded:
     st.stop()
@@ -259,7 +277,7 @@ if not uploaded:
 zip_bytes = uploaded.getvalue()
 paths = list_zip_paths(zip_bytes)
 
-# Auto-pick correct defaults
+# Auto-select correct files
 watch_candidates = [p for p in paths if p.lower().endswith("watch history.txt")]
 likes_candidates = [p for p in paths if p.lower().endswith("like list.txt")]
 
@@ -272,18 +290,18 @@ likes_path = st.sidebar.selectbox("Like List file", paths, index=paths.index(lik
 watch = load_parsed_df(zip_bytes, watch_path)
 likes = load_parsed_df(zip_bytes, likes_path)
 
-# Controls
+# Options
 st.sidebar.header("Display options")
-load_thumbs = st.sidebar.checkbox("Load thumbnails/titles (may be slower)", value=True)
+load_thumbs = st.sidebar.checkbox("Load thumbnails/titles (recommended)", value=True)
 
-# Debug (optional)
+# Debug
 with st.expander("Debug (only if something looks wrong)"):
-    st.write("Watch rows:", len(watch), "Columns:", list(watch.columns))
-    st.write("Like rows:", len(likes), "Columns:", list(likes.columns))
     st.write("Selected watch file:", watch_path)
     st.write("Selected like file:", likes_path)
+    st.write("Watch rows:", len(watch), "Columns:", list(watch.columns))
+    st.write("Like rows:", len(likes), "Columns:", list(likes.columns))
 
-# Date filters based on available range
+# Date range
 min_dt = min([df["ts_utc"].min() for df in [watch, likes] if not df.empty], default=None)
 max_dt = max([df["ts_utc"].max() for df in [watch, likes] if not df.empty], default=None)
 
@@ -322,9 +340,9 @@ t1, t2 = st.columns(2)
 if not watch_f.empty:
     watch_daily = (
         watch_f.assign(day=watch_f["ts_utc"].dt.date)
-        .groupby("day")
-        .size()
-        .reset_index(name="watch_events")
+               .groupby("day")
+               .size()
+               .reset_index(name="watch_events")
     )
     t1.line_chart(watch_daily.set_index("day"))
 else:
@@ -333,9 +351,9 @@ else:
 if not likes_f.empty:
     likes_daily = (
         likes_f.assign(day=likes_f["ts_utc"].dt.date)
-        .groupby("day")
-        .size()
-        .reset_index(name="like_events")
+              .groupby("day")
+              .size()
+              .reset_index(name="like_events")
     )
     t2.line_chart(likes_daily.set_index("day"))
 else:
@@ -351,12 +369,12 @@ w_s = add_sessions(watch_f, gap_minutes=gap_minutes) if not watch_f.empty else p
 if not w_s.empty:
     session_stats = (
         w_s.groupby("session_id")
-        .agg(
-            session_start=("ts_utc", "min"),
-            session_end=("ts_utc", "max"),
-            events=("ts_utc", "size"),
-        )
-        .reset_index()
+           .agg(
+               session_start=("ts_utc", "min"),
+               session_end=("ts_utc", "max"),
+               events=("ts_utc", "size"),
+           )
+           .reset_index()
     )
     session_stats["duration_min"] = (
         (session_stats["session_end"] - session_stats["session_start"]).dt.total_seconds() / 60.0
@@ -379,9 +397,10 @@ num_cards = st.slider("Number of clips", 4, 40, 12, step=4)
 
 tab1, tab2 = st.tabs(["Watched", "Liked"])
 with tab1:
-    render_cards(watch_f, cards_per_row, num_cards, load_thumbs=load_thumbs)
+    render_cards_client_oembed(watch_f, cards_per_row, num_cards, load_thumbs=load_thumbs)
 with tab2:
-    render_cards(likes_f, cards_per_row, num_cards, load_thumbs=load_thumbs)
+    render_cards_client_oembed(likes_f, cards_per_row, num_cards, load_thumbs=load_thumbs)
+
 
 
 
