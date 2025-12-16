@@ -39,3 +39,11 @@ Data Visualization Libraries
 Deployed on Streamlit Cloud
 https://tiktok-ba-dashboard.streamlit.app/ 
 or you can try this sample zip file(https://github.com/user-attachments/files/24192667/sample.realistic.tiktok.data.zip)
+![1](https://github.com/user-attachments/assets/5fd0ec54-1737-4569-bed0-7e689dd82c93)
+![2](https://github.com/user-attachments/assets/42b0a69b-4a71-4231-a9ba-3c0aa9e3fc8f)
+![3](https://github.com/user-attachments/assets/e32a09d1-1f52-42d0-809c-23102a30e9e4)
+![4](https://github.com/user-attachments/assets/9d22aa15-d061-4779-9a75-c8fd25b6ab25)
+
+
+
+
