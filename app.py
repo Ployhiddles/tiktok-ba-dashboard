@@ -65,7 +65,7 @@ def render_cards_client_oembed(df: pd.DataFrame, cards_per_row: int = 4, n: int 
         st.info("No rows to show. (Empty in this date range or wrong file selected.)")
         return
     if not required.issubset(set(df.columns)):
-        st.error(f"Selected file didn’t parse correctly. Found columns: {list(df.columns)}")
+        st.error("Selected file didn’t parse correctly. Please select Watch History / Like List files.")
         return
 
     recent = (
@@ -187,17 +187,14 @@ def render_cards_client_oembed(df: pd.DataFrame, cards_per_row: int = 4, n: int 
         }}
 
         async function runLimited(tasks, limit=4) {{
-          const results = [];
           let i = 0;
           const workers = new Array(limit).fill(0).map(async () => {{
             while (i < tasks.length) {{
               const idx = i++;
-              try {{ results[idx] = await tasks[idx](); }}
-              catch(e) {{ results[idx] = null; }}
+              try {{ await tasks[idx](); }} catch(e) {{}}
             }}
           }});
           await Promise.all(workers);
-          return results;
         }}
 
         const cards = Array.from(document.querySelectorAll(".card"));
@@ -234,13 +231,10 @@ def render_cards_client_oembed(df: pd.DataFrame, cards_per_row: int = 4, n: int 
     height = min(1400, rows * 330 + 20)
     components.html(html_doc, height=height, scrolling=False)
 
-# -------------------- APP (one page) --------------------
+# -------------------- APP (one page, no sliders) --------------------
 st.set_page_config(layout="wide")
 st.title("Engagement & Retention Dashboard")
-
-st.markdown(
-    "Upload your TikTok export ZIP → pick Watch History + Like List → see KPIs, trends, sessions, and clip previews."
-)
+st.caption("Upload your TikTok export ZIP. The dashboard will compute KPIs, trends, sessions, and show recent clips.")
 
 uploaded = st.sidebar.file_uploader("Upload TikTok ZIP", type=["zip"])
 if not uploaded:
@@ -249,7 +243,7 @@ if not uploaded:
 zip_bytes = uploaded.getvalue()
 paths = list_zip_paths(zip_bytes)
 
-# Auto-select correct files
+# auto-select correct files
 watch_candidates = [p for p in paths if p.lower().endswith("watch history.txt")]
 likes_candidates = [p for p in paths if p.lower().endswith("like list.txt")]
 
@@ -262,7 +256,7 @@ likes_path = st.sidebar.selectbox("Like List file", paths, index=paths.index(lik
 watch = load_parsed_df(zip_bytes, watch_path)
 likes = load_parsed_df(zip_bytes, likes_path)
 
-# Date filter (no slider; simple inputs are OK)
+# date range inputs (not sliders)
 min_dt = min([df["ts_utc"].min() for df in [watch, likes] if not df.empty], default=None)
 max_dt = max([df["ts_utc"].max() for df in [watch, likes] if not df.empty], default=None)
 
@@ -293,7 +287,7 @@ k4.metric("Watch → Like conversion", f"{watch_to_like:.1%}")
 
 st.divider()
 
-# Trends graphs
+# Trends
 st.subheader("Trends")
 t1, t2 = st.columns(2)
 
@@ -321,9 +315,10 @@ else:
 
 st.divider()
 
-# Sessions (fixed gap=30 min; no slider)
+# Sessions (fixed gap 30)
 st.subheader("Session behavior (gap = 30 minutes)")
 w_s = add_sessions(watch_f, gap_minutes=30) if not watch_f.empty else pd.DataFrame()
+
 if not w_s.empty:
     session_stats = (
         w_s.groupby("session_id")
@@ -347,14 +342,14 @@ else:
 
 st.divider()
 
-# Clip cards (fixed layout: 4 per row, 12 clips)
+# Cards (fixed: 4 per row, 12 cards)
 st.subheader("TikTok clips")
+
 tab1, tab2 = st.tabs(["Most recent watched", "Most recent liked"])
 with tab1:
     render_cards_client_oembed(watch_f, cards_per_row=4, n=12)
 with tab2:
     render_cards_client_oembed(likes_f, cards_per_row=4, n=12)
-
 
 
 
