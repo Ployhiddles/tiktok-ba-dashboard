@@ -60,6 +60,40 @@ def add_sessions(watch: pd.DataFrame, gap_minutes: int = 30) -> pd.DataFrame:
 
 # -------------------- WRAPPED (Spotify-style story) --------------------
 def render_wrapped(watch_f: pd.DataFrame, likes_f: pd.DataFrame):
+    total_watches = len(watch_f)
+    total_likes = len(likes_f)
+    active_days = watch_f["ts_utc"].dt.date.nunique() if not watch_f.empty else 0
+
+    watch_video_ids = set(watch_f["video_id"].dropna()) if ("video_id" in watch_f.columns and not watch_f.empty) else set()
+    like_video_ids = set(likes_f["video_id"].dropna()) if ("video_id" in likes_f.columns and not likes_f.empty) else set()
+    conversion = (len(watch_video_ids & like_video_ids) / len(watch_video_ids)) if watch_video_ids else 0.0
+
+    if not watch_f.empty:
+        peak_day = (
+            watch_f.assign(day=watch_f["ts_utc"].dt.date)
+                  .groupby("day").size()
+                  .sort_values(ascending=False)
+                  .head(1)
+        )
+        peak_day_str = str(peak_day.index[0])
+        peak_day_count = int(peak_day.iloc[0])
+        peak_hour = int(watch_f["ts_utc"].dt.hour.value_counts().idxmax())
+        peak_hour_txt = f"{peak_hour:02d}:00"
+    else:
+        peak_day_str, peak_day_count, peak_hour_txt = "—", 0, "—"
+
+    # Sessions (fixed 30m)
+    if not watch_f.empty:
+        w = watch_f.sort_values("ts_utc").copy()
+        gap = w["ts_utc"].diff()
+        w["new_session"] = gap.isna() | (gap > pd.Timedelta(minutes=30))
+        sessions = int(w["new_session"].sum())
+        avg_per_session = float(len(w) / sessions) if sessions else 0.0
+    else:
+        sessions, avg_per_session = 0, 0.0
+
+    vibe = "Binge mode 🌀" if total_watches > 800 else ("Chill scroller 🌙" if total_watches > 250 else "Selective watcher 🎯")
+
     st.markdown(
         """
         <style>
@@ -96,6 +130,7 @@ def render_wrapped(watch_f: pd.DataFrame, likes_f: pd.DataFrame):
           .kpi-label{ font-size: 12px; opacity: .8; }
           .kpi-value{ font-size: 26px; font-weight: 800; margin-top: 4px; }
           .kpi-note{ font-size: 12px; opacity: .7; margin-top: 6px; }
+
           .story-row{
             margin-top: 18px;
             display: grid;
@@ -123,40 +158,6 @@ def render_wrapped(watch_f: pd.DataFrame, likes_f: pd.DataFrame):
         """,
         unsafe_allow_html=True,
     )
-
-    total_watches = len(watch_f)
-    total_likes = len(likes_f)
-    active_days = watch_f["ts_utc"].dt.date.nunique() if not watch_f.empty else 0
-
-    watch_video_ids = set(watch_f["video_id"].dropna()) if ("video_id" in watch_f.columns and not watch_f.empty) else set()
-    like_video_ids = set(likes_f["video_id"].dropna()) if ("video_id" in likes_f.columns and not likes_f.empty) else set()
-    conversion = (len(watch_video_ids & like_video_ids) / len(watch_video_ids)) if watch_video_ids else 0.0
-
-    if not watch_f.empty:
-        peak_day = (
-            watch_f.assign(day=watch_f["ts_utc"].dt.date)
-                  .groupby("day").size()
-                  .sort_values(ascending=False)
-                  .head(1)
-        )
-        peak_day_str = str(peak_day.index[0])
-        peak_day_count = int(peak_day.iloc[0])
-        peak_hour = int(watch_f["ts_utc"].dt.hour.value_counts().idxmax())
-        peak_hour_txt = f"{peak_hour:02d}:00"
-    else:
-        peak_day_str, peak_day_count, peak_hour_txt = "—", 0, "—"
-
-    # session stats (gap 30)
-    if not watch_f.empty:
-        w = watch_f.sort_values("ts_utc").copy()
-        gap = w["ts_utc"].diff()
-        w["new_session"] = gap.isna() | (gap > pd.Timedelta(minutes=30))
-        sessions = int(w["new_session"].sum())
-        avg_per_session = float(len(w) / sessions) if sessions else 0.0
-    else:
-        sessions, avg_per_session = 0, 0.0
-
-    vibe = "Binge mode 🌀" if total_watches > 800 else ("Chill scroller 🌙" if total_watches > 250 else "Selective watcher 🎯")
 
     st.markdown(
         f"""
@@ -364,7 +365,7 @@ def render_cards_client_oembed(df: pd.DataFrame, cards_per_row: int = 4, n: int 
 # -------------------- APP --------------------
 st.set_page_config(layout="wide")
 st.title("Engagement & Retention Dashboard")
-st.caption("Upload your TikTok export ZIP. This page shows a Wrapped-style story + trends + sessions + clip previews.")
+st.caption("Upload your TikTok export ZIP → Wrapped story → trends → sessions → clickable clip previews.")
 
 uploaded = st.sidebar.file_uploader("Upload TikTok ZIP", type=["zip"])
 if not uploaded:
@@ -373,7 +374,6 @@ if not uploaded:
 zip_bytes = uploaded.getvalue()
 paths = list_zip_paths(zip_bytes)
 
-# Auto-select correct files (still shown in sidebar)
 watch_candidates = [p for p in paths if p.lower().endswith("watch history.txt")]
 likes_candidates = [p for p in paths if p.lower().endswith("like list.txt")]
 
@@ -399,12 +399,12 @@ with c2:
 watch_f = apply_date(watch, start, end) if not watch.empty else watch
 likes_f = apply_date(likes, start, end) if not likes.empty else likes
 
-# WRAPPED STORY
+# Wrapped story section (fixed)
 render_wrapped(watch_f, likes_f)
 
 st.divider()
 
-# Trends charts (keep them after story)
+# Trends
 st.subheader("Trends")
 t1, t2 = st.columns(2)
 
@@ -412,8 +412,8 @@ with t1:
     if not watch_f.empty:
         watch_daily = (
             watch_f.assign(day=watch_f["ts_utc"].dt.date)
-                   .groupby("day").size()
-                   .reset_index(name="watch_events")
+                  .groupby("day").size()
+                  .reset_index(name="watch_events")
         )
         st.line_chart(watch_daily.set_index("day"))
     else:
@@ -423,8 +423,8 @@ with t2:
     if not likes_f.empty:
         likes_daily = (
             likes_f.assign(day=likes_f["ts_utc"].dt.date)
-                   .groupby("day").size()
-                   .reset_index(name="like_events")
+                  .groupby("day").size()
+                  .reset_index(name="like_events")
         )
         st.line_chart(likes_daily.set_index("day"))
     else:
@@ -432,7 +432,7 @@ with t2:
 
 st.divider()
 
-# Sessions (fixed gap=30, no slider)
+# Sessions (gap fixed = 30)
 st.subheader("Session behavior (gap = 30 minutes)")
 w_s = add_sessions(watch_f, gap_minutes=30) if not watch_f.empty else pd.DataFrame()
 
@@ -459,13 +459,14 @@ else:
 
 st.divider()
 
-# Clip cards (fixed layout: 4 per row, 12 clips)
+# Clip cards (fixed layout)
 st.subheader("TikTok clips")
-
 tab1, tab2 = st.tabs(["Most recent watched", "Most recent liked"])
 with tab1:
     render_cards_client_oembed(watch_f, cards_per_row=4, n=12)
 with tab2:
     render_cards_client_oembed(likes_f, cards_per_row=4, n=12)
+
+
 
 
