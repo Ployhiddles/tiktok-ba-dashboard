@@ -26,8 +26,7 @@ def parse_date_link_txt(text: str) -> pd.DataFrame:
     if df.empty:
         return df
     df["ts_utc"] = pd.to_datetime(df["ts_utc"], errors="coerce", utc=True)
-    df = df.dropna(subset=["ts_utc"])
-    return df
+    return df.dropna(subset=["ts_utc"])
 
 def read_zip_txt(zf: zipfile.ZipFile, path: str) -> str:
     with zf.open(path) as f:
@@ -59,11 +58,11 @@ def add_sessions(watch: pd.DataFrame, gap_minutes: int = 30) -> pd.DataFrame:
     w["session_id"] = w["new_session"].cumsum()
     return w
 
-# -------------------- CARD GRID (CLIENT-SIDE oEmbed) --------------------
-def render_cards_client_oembed(df: pd.DataFrame, cards_per_row: int, n: int, load_thumbs: bool):
+# -------------------- CARDS (client-side oEmbed) --------------------
+def render_cards_client_oembed(df: pd.DataFrame, cards_per_row: int = 4, n: int = 12):
     required = {"ts_utc", "url"}
     if df is None or df.empty:
-        st.info("No rows to show. Try widening the date range or selecting the correct file.")
+        st.info("No rows to show. (Empty in this date range or wrong file selected.)")
         return
     if not required.issubset(set(df.columns)):
         st.error(f"Selected file didn’t parse correctly. Found columns: {list(df.columns)}")
@@ -77,81 +76,20 @@ def render_cards_client_oembed(df: pd.DataFrame, cards_per_row: int, n: int, loa
           .copy()
     )
 
-    # Build placeholders; JS fills thumb/title/author
     card_divs = []
     for _, r in recent.iterrows():
         url = html.escape(str(r["url"]))
         time = pd.to_datetime(r["ts_utc"], utc=True).strftime("%Y-%m-%d %H:%M")
-
         card_divs.append(f"""
           <div class="card" data-url="{url}">
             <div class="cover placeholder"></div>
             <div class="meta">
-              <div class="title">{"Loading…" if load_thumbs else "TikTok clip"}</div>
+              <div class="title">Loading…</div>
               <div class="sub">{time} UTC</div>
               <a class="btn" href="{url}" target="_blank" rel="noopener noreferrer">Open clip</a>
             </div>
           </div>
         """)
-
-    # If user disables thumbnails, do not run JS fetch at all.
-    js_block = ""
-    if load_thumbs:
-        js_block = r"""
-        <script>
-          async function fetchOembed(url) {
-            const api = "https://www.tiktok.com/oembed?url=" + encodeURIComponent(url);
-            const res = await fetch(api);
-            if (!res.ok) throw new Error("oEmbed failed: " + res.status);
-            return await res.json();
-          }
-
-          // Concurrency limiter to reduce rate-limit issues
-          async function runLimited(tasks, limit=4) {
-            const results = [];
-            let i = 0;
-            const workers = new Array(limit).fill(0).map(async () => {
-              while (i < tasks.length) {
-                const idx = i++;
-                try { results[idx] = await tasks[idx](); }
-                catch(e) { results[idx] = null; }
-              }
-            });
-            await Promise.all(workers);
-            return results;
-          }
-
-          const cards = Array.from(document.querySelectorAll(".card"));
-          const tasks = cards.map(card => async () => {
-            const url = card.dataset.url;
-            const data = await fetchOembed(url);
-
-            const thumb = data.thumbnail_url;
-            const title = data.title || "TikTok clip";
-            const author = data.author_name || "";
-
-            // Update title + author
-            const titleEl = card.querySelector(".title");
-            titleEl.textContent = title;
-
-            const subEl = card.querySelector(".sub");
-            if (author) subEl.textContent = subEl.textContent + " • " + author;
-
-            // Update cover
-            if (thumb) {
-              const cover = card.querySelector(".cover");
-              cover.classList.remove("placeholder");
-              cover.innerHTML = "";
-              const img = document.createElement("img");
-              img.src = thumb;
-              img.loading = "lazy";
-              cover.appendChild(img);
-            }
-          });
-
-          runLimited(tasks, 4);
-        </script>
-        """
 
     html_doc = f"""
     <html>
@@ -168,8 +106,6 @@ def render_cards_client_oembed(df: pd.DataFrame, cards_per_row: int, n: int, loa
         grid-template-columns:repeat({cards_per_row},1fr);
         gap:18px;
       }}
-
-      /* Square card + hover */
       .card {{
         aspect-ratio:1/1;
         padding:12px;
@@ -190,32 +126,26 @@ def render_cards_client_oembed(df: pd.DataFrame, cards_per_row: int, n: int, loa
           0 0 35px rgba(255,90,90,.35);
         border-color: rgba(255,255,255,.25);
       }}
-
       .cover {{
         aspect-ratio:1/1;
         overflow:hidden;
         border-radius:14px;
         border:1px solid rgba(255,255,255,.10);
         background:rgba(255,255,255,.06);
-        position:relative;
       }}
-
-      /* Placeholder gradient */
       .placeholder {{
         background:linear-gradient(135deg, rgba(170,70,255,.75), rgba(255,70,160,.55));
       }}
-
       .cover img {{
         width:100%;
         height:100%;
         object-fit:cover;
-        display:block;
         transition:transform .35s;
+        display:block;
       }}
       .card:hover .cover img {{
         transform:scale(1.08);
       }}
-
       .meta {{ margin-top:8px; }}
       .title {{
         font-size:13px;
@@ -245,12 +175,57 @@ def render_cards_client_oembed(df: pd.DataFrame, cards_per_row: int, n: int, loa
         background:rgba(255,255,255,.18);
       }}
     </style>
-
     <body>
-      <div class="grid">
-        {''.join(card_divs)}
-      </div>
-      {js_block}
+      <div class="grid">{''.join(card_divs)}</div>
+
+      <script>
+        async function fetchOembed(url) {{
+          const api = "https://www.tiktok.com/oembed?url=" + encodeURIComponent(url);
+          const res = await fetch(api);
+          if (!res.ok) throw new Error("oEmbed failed: " + res.status);
+          return await res.json();
+        }}
+
+        async function runLimited(tasks, limit=4) {{
+          const results = [];
+          let i = 0;
+          const workers = new Array(limit).fill(0).map(async () => {{
+            while (i < tasks.length) {{
+              const idx = i++;
+              try {{ results[idx] = await tasks[idx](); }}
+              catch(e) {{ results[idx] = null; }}
+            }}
+          }});
+          await Promise.all(workers);
+          return results;
+        }}
+
+        const cards = Array.from(document.querySelectorAll(".card"));
+        const tasks = cards.map(card => async () => {{
+          const url = card.dataset.url;
+          const data = await fetchOembed(url);
+
+          const thumb = data.thumbnail_url;
+          const title = data.title || "TikTok clip";
+          const author = data.author_name || "";
+
+          card.querySelector(".title").textContent = title;
+          const sub = card.querySelector(".sub");
+          sub.textContent = sub.textContent + (author ? (" • " + author) : "");
+
+          if (thumb) {{
+            const cover = card.querySelector(".cover");
+            cover.classList.remove("placeholder");
+            cover.innerHTML = "";
+            const img = document.createElement("img");
+            img.src = thumb;
+            img.loading = "lazy";
+            cover.appendChild(img);
+          }}
+        }});
+
+        runLimited(tasks, 4);
+      </script>
     </body>
     </html>
     """
@@ -259,17 +234,14 @@ def render_cards_client_oembed(df: pd.DataFrame, cards_per_row: int, n: int, loa
     height = min(1400, rows * 330 + 20)
     components.html(html_doc, height=height, scrolling=False)
 
-# -------------------- STREAMLIT APP --------------------
+# -------------------- APP (one page) --------------------
 st.set_page_config(layout="wide")
 st.title("Engagement & Retention Dashboard")
 
-st.info(
-    "📦 Upload your **TikTok data export ZIP**. "
-    "Select **Watch History** + **Like List** in the sidebar. "
-    "Thumbnails/titles load in your browser (more reliable on Streamlit Cloud)."
+st.markdown(
+    "Upload your TikTok export ZIP → pick Watch History + Like List → see KPIs, trends, sessions, and clip previews."
 )
 
-# Sidebar upload
 uploaded = st.sidebar.file_uploader("Upload TikTok ZIP", type=["zip"])
 if not uploaded:
     st.stop()
@@ -290,18 +262,7 @@ likes_path = st.sidebar.selectbox("Like List file", paths, index=paths.index(lik
 watch = load_parsed_df(zip_bytes, watch_path)
 likes = load_parsed_df(zip_bytes, likes_path)
 
-# Options
-st.sidebar.header("Display options")
-load_thumbs = st.sidebar.checkbox("Load thumbnails/titles (recommended)", value=True)
-
-# Debug
-with st.expander("Debug (only if something looks wrong)"):
-    st.write("Selected watch file:", watch_path)
-    st.write("Selected like file:", likes_path)
-    st.write("Watch rows:", len(watch), "Columns:", list(watch.columns))
-    st.write("Like rows:", len(likes), "Columns:", list(likes.columns))
-
-# Date range
+# Date filter (no slider; simple inputs are OK)
 min_dt = min([df["ts_utc"].min() for df in [watch, likes] if not df.empty], default=None)
 max_dt = max([df["ts_utc"].max() for df in [watch, likes] if not df.empty], default=None)
 
@@ -311,12 +272,11 @@ with c1:
 with c2:
     end = st.date_input("End date", value=max_dt.date() if max_dt is not None else None)
 
-watch_f = apply_date(watch, start, end) if (not watch.empty and "ts_utc" in watch.columns) else watch
-likes_f = apply_date(likes, start, end) if (not likes.empty and "ts_utc" in likes.columns) else likes
+watch_f = apply_date(watch, start, end) if not watch.empty else watch
+likes_f = apply_date(likes, start, end) if not likes.empty else likes
 
-# -------------------- KPIs --------------------
+# KPIs
 st.subheader("KPIs")
-
 watch_days = watch_f["ts_utc"].dt.date.nunique() if not watch_f.empty else 0
 total_watches = len(watch_f)
 total_likes = len(likes_f)
@@ -333,16 +293,16 @@ k4.metric("Watch → Like conversion", f"{watch_to_like:.1%}")
 
 st.divider()
 
-# -------------------- GRAPHS --------------------
+# Trends graphs
 st.subheader("Trends")
 t1, t2 = st.columns(2)
 
 if not watch_f.empty:
     watch_daily = (
         watch_f.assign(day=watch_f["ts_utc"].dt.date)
-               .groupby("day")
-               .size()
-               .reset_index(name="watch_events")
+        .groupby("day")
+        .size()
+        .reset_index(name="watch_events")
     )
     t1.line_chart(watch_daily.set_index("day"))
 else:
@@ -351,9 +311,9 @@ else:
 if not likes_f.empty:
     likes_daily = (
         likes_f.assign(day=likes_f["ts_utc"].dt.date)
-              .groupby("day")
-              .size()
-              .reset_index(name="like_events")
+        .groupby("day")
+        .size()
+        .reset_index(name="like_events")
     )
     t2.line_chart(likes_daily.set_index("day"))
 else:
@@ -361,20 +321,18 @@ else:
 
 st.divider()
 
-# -------------------- SESSIONS --------------------
-st.subheader("Session behavior (based on Watch History)")
-gap_minutes = st.slider("Session gap (minutes)", 5, 120, 30, step=5)
-
-w_s = add_sessions(watch_f, gap_minutes=gap_minutes) if not watch_f.empty else pd.DataFrame()
+# Sessions (fixed gap=30 min; no slider)
+st.subheader("Session behavior (gap = 30 minutes)")
+w_s = add_sessions(watch_f, gap_minutes=30) if not watch_f.empty else pd.DataFrame()
 if not w_s.empty:
     session_stats = (
         w_s.groupby("session_id")
-           .agg(
-               session_start=("ts_utc", "min"),
-               session_end=("ts_utc", "max"),
-               events=("ts_utc", "size"),
-           )
-           .reset_index()
+        .agg(
+            session_start=("ts_utc", "min"),
+            session_end=("ts_utc", "max"),
+            events=("ts_utc", "size"),
+        )
+        .reset_index()
     )
     session_stats["duration_min"] = (
         (session_stats["session_end"] - session_stats["session_start"]).dt.total_seconds() / 60.0
@@ -389,17 +347,15 @@ else:
 
 st.divider()
 
-# -------------------- CLIP CARDS --------------------
-st.subheader("TikTok clip links")
-
-cards_per_row = st.slider("Cards per row", 2, 5, 4)
-num_cards = st.slider("Number of clips", 4, 40, 12, step=4)
-
-tab1, tab2 = st.tabs(["Watched", "Liked"])
+# Clip cards (fixed layout: 4 per row, 12 clips)
+st.subheader("TikTok clips")
+tab1, tab2 = st.tabs(["Most recent watched", "Most recent liked"])
 with tab1:
-    render_cards_client_oembed(watch_f, cards_per_row, num_cards, load_thumbs=load_thumbs)
+    render_cards_client_oembed(watch_f, cards_per_row=4, n=12)
 with tab2:
-    render_cards_client_oembed(likes_f, cards_per_row, num_cards, load_thumbs=load_thumbs)
+    render_cards_client_oembed(likes_f, cards_per_row=4, n=12)
+
+
 
 
 
