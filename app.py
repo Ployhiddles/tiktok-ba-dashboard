@@ -2,6 +2,7 @@ import re
 import zipfile
 from io import BytesIO
 import html
+import textwrap
 
 import pandas as pd
 import streamlit as st
@@ -94,8 +95,9 @@ def render_wrapped(watch_f: pd.DataFrame, likes_f: pd.DataFrame):
 
     vibe = "Binge mode 🌀" if total_watches > 800 else ("Chill scroller 🌙" if total_watches > 250 else "Selective watcher 🎯")
 
+    # IMPORTANT: dedent fixes the “HTML shows as code block” bug
     st.markdown(
-        """
+        textwrap.dedent("""
         <style>
           .wrapped-hero{
             border-radius: 28px;
@@ -155,12 +157,12 @@ def render_wrapped(watch_f: pd.DataFrame, likes_f: pd.DataFrame):
             .story-row{ grid-template-columns: 1fr; }
           }
         </style>
-        """,
+        """),
         unsafe_allow_html=True,
     )
 
     st.markdown(
-        f"""
+        textwrap.dedent(f"""
         <div class="wrapped-hero">
           <p class="wrapped-title">Your TikTok Wrapped</p>
           <div class="wrapped-sub">A quick story of your watching & liking behavior (from your TikTok export).</div>
@@ -211,7 +213,7 @@ def render_wrapped(watch_f: pd.DataFrame, likes_f: pd.DataFrame):
             </div>
           </div>
         </div>
-        """,
+        """),
         unsafe_allow_html=True,
     )
 
@@ -301,7 +303,7 @@ def render_cards_client_oembed(df: pd.DataFrame, cards_per_row: int = 4, n: int 
       .sub {{ font-size:12px; opacity:.75; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
       .btn {{
         margin-top:8px; display:block; padding:8px; text-align:center;
-        border-radius:12px; background:rgba(255,255,255,.1);
+        border-radius:12px; background:rgba(255,255,255,.10);
         border:1px solid rgba(255,255,255,.15); color:white; text-decoration:none;
       }}
       .btn:hover {{ background:rgba(255,255,255,.18); }}
@@ -399,7 +401,7 @@ with c2:
 watch_f = apply_date(watch, start, end) if not watch.empty else watch
 likes_f = apply_date(likes, start, end) if not likes.empty else likes
 
-# Wrapped story section (fixed)
+# Wrapped story section (FIXED)
 render_wrapped(watch_f, likes_f)
 
 st.divider()
@@ -466,5 +468,6 @@ with tab1:
     render_cards_client_oembed(watch_f, cards_per_row=4, n=12)
 with tab2:
     render_cards_client_oembed(likes_f, cards_per_row=4, n=12)
+
 
 
