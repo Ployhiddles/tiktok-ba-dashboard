@@ -61,13 +61,6 @@ All data is processed locally within the Streamlit session. No personal data is 
 
 ---
 
-## 🚀 How to Run Locally
-```bash
-git clone https://github.com/Ployhiddles/tiktok-ba-dashboard.git
-cd tiktok-ba-dashboard
-pip install -r requirements.txt
-streamlit run app.py
-
 https://tiktok-ba-dashboard.streamlit.app/ 
 or you can try this sample zip file(https://github.com/user-attachments/files/24192667/sample.realistic.tiktok.data.zip)
 ![1](https://github.com/user-attachments/assets/5fd0ec54-1737-4569-bed0-7e689dd82c93)
