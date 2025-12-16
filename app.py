@@ -1,8 +1,7 @@
 import re
 import zipfile
 from io import BytesIO
-import html
-import textwrap
+import html as py_html
 
 import pandas as pd
 import streamlit as st
@@ -22,7 +21,9 @@ def parse_date_link_txt(text: str) -> pd.DataFrame:
     n = min(len(dates), len(links))
     rows = []
     for i in range(n):
-        rows.append({"ts_utc": dates[i], "url": links[i], "video_id": extract_video_id(links[i])})
+        rows.append(
+            {"ts_utc": dates[i], "url": links[i], "video_id": extract_video_id(links[i])}
+        )
     df = pd.DataFrame(rows)
     if df.empty:
         return df
@@ -60,21 +61,31 @@ def add_sessions(watch: pd.DataFrame, gap_minutes: int = 30) -> pd.DataFrame:
     return w
 
 # -------------------- WRAPPED (Spotify-style story) --------------------
+# IMPORTANT: uses components.html() to avoid Markdown parsing => no more black code block.
 def render_wrapped(watch_f: pd.DataFrame, likes_f: pd.DataFrame):
     total_watches = len(watch_f)
     total_likes = len(likes_f)
     active_days = watch_f["ts_utc"].dt.date.nunique() if not watch_f.empty else 0
 
-    watch_video_ids = set(watch_f["video_id"].dropna()) if ("video_id" in watch_f.columns and not watch_f.empty) else set()
-    like_video_ids = set(likes_f["video_id"].dropna()) if ("video_id" in likes_f.columns and not likes_f.empty) else set()
+    watch_video_ids = (
+        set(watch_f["video_id"].dropna())
+        if ("video_id" in watch_f.columns and not watch_f.empty)
+        else set()
+    )
+    like_video_ids = (
+        set(likes_f["video_id"].dropna())
+        if ("video_id" in likes_f.columns and not likes_f.empty)
+        else set()
+    )
     conversion = (len(watch_video_ids & like_video_ids) / len(watch_video_ids)) if watch_video_ids else 0.0
 
     if not watch_f.empty:
         peak_day = (
             watch_f.assign(day=watch_f["ts_utc"].dt.date)
-                  .groupby("day").size()
-                  .sort_values(ascending=False)
-                  .head(1)
+            .groupby("day")
+            .size()
+            .sort_values(ascending=False)
+            .head(1)
         )
         peak_day_str = str(peak_day.index[0])
         peak_day_count = int(peak_day.iloc[0])
@@ -83,7 +94,7 @@ def render_wrapped(watch_f: pd.DataFrame, likes_f: pd.DataFrame):
     else:
         peak_day_str, peak_day_count, peak_hour_txt = "—", 0, "—"
 
-    # Sessions (fixed 30m)
+    # sessions (fixed 30m)
     if not watch_f.empty:
         w = watch_f.sort_values("ts_utc").copy()
         gap = w["ts_utc"].diff()
@@ -93,128 +104,147 @@ def render_wrapped(watch_f: pd.DataFrame, likes_f: pd.DataFrame):
     else:
         sessions, avg_per_session = 0, 0.0
 
-    vibe = "Binge mode 🌀" if total_watches > 800 else ("Chill scroller 🌙" if total_watches > 250 else "Selective watcher 🎯")
-
-    # IMPORTANT: dedent fixes the “HTML shows as code block” bug
-    st.markdown(
-        textwrap.dedent("""
-        <style>
-          .wrapped-hero{
-            border-radius: 28px;
-            padding: 28px;
-            background: linear-gradient(135deg, rgba(125,50,255,.55), rgba(255,60,160,.35));
-            border: 1px solid rgba(255,255,255,.15);
-            box-shadow: 0 18px 60px rgba(0,0,0,.45);
-          }
-          .wrapped-title{
-            font-size: 42px;
-            font-weight: 800;
-            line-height: 1.05;
-            margin: 0;
-          }
-          .wrapped-sub{
-            margin-top: 8px;
-            opacity: .85;
-            font-size: 16px;
-          }
-          .kpi-grid{
-            display: grid;
-            grid-template-columns: repeat(4, minmax(0,1fr));
-            gap: 14px;
-            margin-top: 18px;
-          }
-          .kpi-card{
-            border-radius: 20px;
-            padding: 16px;
-            background: rgba(0,0,0,.22);
-            border: 1px solid rgba(255,255,255,.10);
-          }
-          .kpi-label{ font-size: 12px; opacity: .8; }
-          .kpi-value{ font-size: 26px; font-weight: 800; margin-top: 4px; }
-          .kpi-note{ font-size: 12px; opacity: .7; margin-top: 6px; }
-
-          .story-row{
-            margin-top: 18px;
-            display: grid;
-            grid-template-columns: 1.2fr .8fr;
-            gap: 14px;
-          }
-          .story-card{
-            border-radius: 24px;
-            padding: 18px;
-            background: rgba(255,255,255,.04);
-            border: 1px solid rgba(255,255,255,.10);
-          }
-          .story-h{ font-size: 18px; font-weight: 750; margin: 0; }
-          .story-p{ margin-top: 8px; opacity: .85; line-height: 1.4; }
-          .pill{
-            display:inline-block; padding:6px 10px; border-radius: 999px;
-            background: rgba(255,255,255,.10); border: 1px solid rgba(255,255,255,.12);
-            font-size: 12px; opacity:.9; margin-right:8px; margin-top:8px;
-          }
-          @media (max-width: 1100px){
-            .kpi-grid{ grid-template-columns: repeat(2, minmax(0,1fr)); }
-            .story-row{ grid-template-columns: 1fr; }
-          }
-        </style>
-        """),
-        unsafe_allow_html=True,
+    vibe = (
+        "Binge mode 🌀" if total_watches > 800 else
+        ("Chill scroller 🌙" if total_watches > 250 else "Selective watcher 🎯")
     )
 
-    st.markdown(
-        textwrap.dedent(f"""
-        <div class="wrapped-hero">
-          <p class="wrapped-title">Your TikTok Wrapped</p>
-          <div class="wrapped-sub">A quick story of your watching & liking behavior (from your TikTok export).</div>
+    wrapped_html = f"""
+    <div class="wrapped-hero">
+      <p class="wrapped-title">Your TikTok Wrapped</p>
+      <div class="wrapped-sub">A quick story of your watching & liking behavior (from your TikTok export).</div>
 
-          <div class="kpi-grid">
-            <div class="kpi-card">
-              <div class="kpi-label">Total watches</div>
-              <div class="kpi-value">{total_watches:,}</div>
-              <div class="kpi-note">{vibe}</div>
-            </div>
-            <div class="kpi-card">
-              <div class="kpi-label">Total likes</div>
-              <div class="kpi-value">{total_likes:,}</div>
-              <div class="kpi-note">Your “I approve” button</div>
-            </div>
-            <div class="kpi-card">
-              <div class="kpi-label">Watch → Like</div>
-              <div class="kpi-value">{conversion:.1%}</div>
-              <div class="kpi-note">Watches that become likes</div>
-            </div>
-            <div class="kpi-card">
-              <div class="kpi-label">Active days</div>
-              <div class="kpi-value">{active_days:,}</div>
-              <div class="kpi-note">Days with at least one watch</div>
-            </div>
-          </div>
-
-          <div class="story-row">
-            <div class="story-card">
-              <p class="story-h">Your peak day</p>
-              <p class="story-p">
-                You were most active on <b>{peak_day_str}</b> with <b>{peak_day_count}</b> watched clips.
-              </p>
-              <span class="pill">Peak hour: <b>{peak_hour_txt}</b></span>
-              <span class="pill">Sessions: <b>{sessions}</b></span>
-              <span class="pill">Avg clips/session: <b>{avg_per_session:.1f}</b></span>
-            </div>
-
-            <div class="story-card">
-              <p class="story-h">Your “like energy”</p>
-              <p class="story-p">
-                A watch turns into a like about <b>{conversion:.1%}</b> of the time.
-                Higher conversion usually means your feed is very “on point”.
-              </p>
-              <p class="story-p" style="opacity:.75; font-size:13px;">
-                BA angle: use this as a proxy for content relevance & satisfaction.
-              </p>
-            </div>
-          </div>
+      <div class="kpi-grid">
+        <div class="kpi-card">
+          <div class="kpi-label">Total watches</div>
+          <div class="kpi-value">{total_watches:,}</div>
+          <div class="kpi-note">{vibe}</div>
         </div>
-        """),
-        unsafe_allow_html=True,
+        <div class="kpi-card">
+          <div class="kpi-label">Total likes</div>
+          <div class="kpi-value">{total_likes:,}</div>
+          <div class="kpi-note">Your “I approve” button</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Watch → Like</div>
+          <div class="kpi-value">{conversion:.1%}</div>
+          <div class="kpi-note">Watches that become likes</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Active days</div>
+          <div class="kpi-value">{active_days:,}</div>
+          <div class="kpi-note">Days with at least one watch</div>
+        </div>
+      </div>
+
+      <div class="story-row">
+        <div class="story-card">
+          <p class="story-h">Your peak day</p>
+          <p class="story-p">
+            You were most active on <b>{peak_day_str}</b> with <b>{peak_day_count}</b> watched clips.
+          </p>
+          <span class="pill">Peak hour: <b>{peak_hour_txt}</b></span>
+          <span class="pill">Sessions: <b>{sessions}</b></span>
+          <span class="pill">Avg clips/session: <b>{avg_per_session:.1f}</b></span>
+        </div>
+
+        <div class="story-card">
+          <p class="story-h">Your “like energy”</p>
+          <p class="story-p">
+            A watch turns into a like about <b>{conversion:.1%}</b> of the time.
+            Higher conversion usually means your feed is very “on point”.
+          </p>
+          <p class="story-p" style="opacity:.75; font-size:13px;">
+            BA angle: use this as a proxy for content relevance & satisfaction.
+          </p>
+        </div>
+      </div>
+    </div>
+    """
+
+    components.html(
+        f"""
+        <html>
+          <head><meta charset="utf-8"/></head>
+          <style>
+            body {{
+              margin: 0;
+              background: transparent;
+              color: white;
+              font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+            }}
+            .wrapped-hero {{
+              border-radius: 28px;
+              padding: 28px;
+              background: linear-gradient(135deg, rgba(125,50,255,.55), rgba(255,60,160,.35));
+              border: 1px solid rgba(255,255,255,.15);
+              box-shadow: 0 18px 60px rgba(0,0,0,.45);
+            }}
+            .wrapped-title {{
+              font-size: 42px;
+              font-weight: 800;
+              line-height: 1.05;
+              margin: 0;
+            }}
+            .wrapped-sub {{
+              margin-top: 8px;
+              opacity: .85;
+              font-size: 16px;
+            }}
+
+            .kpi-grid {{
+              display: grid;
+              grid-template-columns: repeat(4, minmax(0,1fr));
+              gap: 14px;
+              margin-top: 18px;
+            }}
+            .kpi-card {{
+              border-radius: 20px;
+              padding: 16px;
+              background: rgba(0,0,0,.22);
+              border: 1px solid rgba(255,255,255,.10);
+            }}
+            .kpi-label {{ font-size: 12px; opacity: .8; }}
+            .kpi-value {{ font-size: 26px; font-weight: 800; margin-top: 4px; }}
+            .kpi-note {{ font-size: 12px; opacity: .7; margin-top: 6px; }}
+
+            .story-row {{
+              margin-top: 18px;
+              display: grid;
+              grid-template-columns: 1.2fr .8fr;
+              gap: 14px;
+            }}
+            .story-card {{
+              border-radius: 24px;
+              padding: 18px;
+              background: rgba(255,255,255,.04);
+              border: 1px solid rgba(255,255,255,.10);
+            }}
+            .story-h {{ font-size: 18px; font-weight: 750; margin: 0; }}
+            .story-p {{ margin-top: 8px; opacity: .85; line-height: 1.4; }}
+            .pill {{
+              display:inline-block;
+              padding:6px 10px;
+              border-radius: 999px;
+              background: rgba(255,255,255,.10);
+              border: 1px solid rgba(255,255,255,.12);
+              font-size: 12px;
+              opacity:.9;
+              margin-right:8px;
+              margin-top:8px;
+            }}
+            @media (max-width: 1100px) {{
+              .kpi-grid {{ grid-template-columns: repeat(2, minmax(0,1fr)); }}
+              .story-row {{ grid-template-columns: 1fr; }}
+            }}
+          </style>
+          <body>
+            {wrapped_html}
+          </body>
+        </html>
+        """,
+        height=560,
+        scrolling=False,
     )
 
 # -------------------- CLIP CARDS (client-side oEmbed) --------------------
@@ -229,15 +259,15 @@ def render_cards_client_oembed(df: pd.DataFrame, cards_per_row: int = 4, n: int 
 
     recent = (
         df.sort_values("ts_utc", ascending=False)
-          .dropna(subset=["url"])
-          .drop_duplicates(subset=["url"])
-          .head(n)
-          .copy()
+        .dropna(subset=["url"])
+        .drop_duplicates(subset=["url"])
+        .head(n)
+        .copy()
     )
 
     card_divs = []
     for _, r in recent.iterrows():
-        url = html.escape(str(r["url"]))
+        url = py_html.escape(str(r["url"]))
         time = pd.to_datetime(r["ts_utc"], utc=True).strftime("%Y-%m-%d %H:%M")
         card_divs.append(f"""
           <div class="card" data-url="{url}">
@@ -401,7 +431,7 @@ with c2:
 watch_f = apply_date(watch, start, end) if not watch.empty else watch
 likes_f = apply_date(likes, start, end) if not likes.empty else likes
 
-# Wrapped story section (FIXED)
+# Wrapped story (fixed)
 render_wrapped(watch_f, likes_f)
 
 st.divider()
@@ -414,8 +444,9 @@ with t1:
     if not watch_f.empty:
         watch_daily = (
             watch_f.assign(day=watch_f["ts_utc"].dt.date)
-                  .groupby("day").size()
-                  .reset_index(name="watch_events")
+            .groupby("day")
+            .size()
+            .reset_index(name="watch_events")
         )
         st.line_chart(watch_daily.set_index("day"))
     else:
@@ -425,8 +456,9 @@ with t2:
     if not likes_f.empty:
         likes_daily = (
             likes_f.assign(day=likes_f["ts_utc"].dt.date)
-                  .groupby("day").size()
-                  .reset_index(name="like_events")
+            .groupby("day")
+            .size()
+            .reset_index(name="like_events")
         )
         st.line_chart(likes_daily.set_index("day"))
     else:
@@ -441,12 +473,12 @@ w_s = add_sessions(watch_f, gap_minutes=30) if not watch_f.empty else pd.DataFra
 if not w_s.empty:
     session_stats = (
         w_s.groupby("session_id")
-           .agg(
-               session_start=("ts_utc", "min"),
-               session_end=("ts_utc", "max"),
-               events=("ts_utc", "size"),
-           )
-           .reset_index()
+        .agg(
+            session_start=("ts_utc", "min"),
+            session_end=("ts_utc", "max"),
+            events=("ts_utc", "size"),
+        )
+        .reset_index()
     )
     session_stats["duration_min"] = (
         (session_stats["session_end"] - session_stats["session_start"]).dt.total_seconds() / 60.0
