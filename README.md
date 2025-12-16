@@ -1,42 +1,73 @@
-📊 TikTok Behavioral Analytics Dashboard
+# TikTok Behavioral Analytics Dashboard
 
-This application is an interactive dashboard that transforms TikTok personal data exports into meaningful behavioral insights. Users can upload their TikTok data (ZIP export) and explore how they interact with content on the platform over time.
+An interactive data analytics dashboard that transforms raw TikTok personal data exports into
+actionable behavioral insights. The application allows users to upload their TikTok data (ZIP export)
+and explore engagement patterns, activity trends, and usage behavior over time.
 
-The dashboard focuses on user behavior, engagement patterns, and content consumption trends, making raw TikTok data easier to understand through visual analytics.
+🔗 **Live App:** https://tiktok-ba-dashboard.streamlit.app/
 
-🔍 Key Features
+---
 
-Upload and analyze TikTok data export files (.zip)
+## 📌 Problem Statement
+TikTok provides users with downloadable personal data, but the raw export is difficult to interpret.
+Files are large, semi-structured, and not designed for analysis. This project bridges that gap by
+converting raw TikTok data into a clear, visual analytics experience.
 
-Visualize activity trends over time (e.g., comments, engagement)
+---
 
-Explore behavioral patterns such as posting and interaction frequency
+## 📊 Key Insights
+- Activity and engagement trends over time
+- Frequency of user interactions (e.g., comments, activity logs)
+- Behavioral patterns in content consumption
+- Identification of peak usage periods
 
-Interactive charts and filters built with Streamlit
+---
 
-Privacy-aware: data is processed per session and not permanently stored
+## 🗂 Data Source
+- TikTok personal data export (ZIP format)
+- Includes semi-structured text files such as:
+  - Comments
+  - Activity history
+  - Engagement logs
 
-🎯 Purpose
+⚠️ **Privacy Notice:**  
+All data is processed locally within the Streamlit session. No personal data is stored or shared.
 
-This project was built to demonstrate business analytics and data visualization skills using real-world data. It highlights:
+---
 
-Data cleaning and parsing from semi-structured files
+## 🛠 Tech Stack
+- Python
+- Streamlit
+- Pandas
+- Data Visualization Libraries
+- Streamlit Community Cloud (Deployment)
 
-Analytical thinking applied to social media behavior
+---
 
-Dashboard design for non-technical users
+## 🧠 Analytical Approach
+1. User uploads TikTok data export (`.zip`)
+2. Application parses semi-structured text files
+3. Data is cleaned and transformed into tabular format
+4. Metrics and trends are visualized interactively
+5. Users explore insights through filters and charts
 
-🛠️ Tech Stack
+---
 
-Python
+## 👤 Target Users
+- Business Analysts
+- Data Analysts
+- Social Media Analysts
+- Content Creators interested in behavioral insights
 
-Streamlit
+---
 
-Pandas
+## 🚀 How to Run Locally
+```bash
+git clone https://github.com/Ployhiddles/tiktok-ba-dashboard.git
+cd tiktok-ba-dashboard
+pip install -r requirements.txt
+streamlit run app.py
 
-Data Visualization Libraries
-
-Deployed on Streamlit Cloud
 https://tiktok-ba-dashboard.streamlit.app/ 
 or you can try this sample zip file(https://github.com/user-attachments/files/24192667/sample.realistic.tiktok.data.zip)
 ![1](https://github.com/user-attachments/assets/5fd0ec54-1737-4569-bed0-7e689dd82c93)
